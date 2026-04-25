@@ -93,8 +93,8 @@ class MediaFile {
     this.coverArtUrl,
     this.description,
   })  : addedAt = addedAt ?? DateTime.now(),
-        contentType = contentType ?? _detectContentType(fileName),
-        mediaKind = mediaKind ?? _detectMediaKind(fileName),
+        contentType = contentType ?? detectContentType(fileName),
+        mediaKind = mediaKind ?? detectMediaKind(fileName),
         subtitleTracks = subtitleTracks ?? const [],
         audioTracks = audioTracks ?? const [],
         genres = genres ?? const [],
@@ -103,7 +103,7 @@ class MediaFile {
         directors = directors ?? const [],
         writers = writers ?? const [];
 
-  static ContentType _detectContentType(String name) {
+  static ContentType detectContentType(String name) {
     final lower = name.toLowerCase();
     final animeKeywords = [
       'bleach',
@@ -140,12 +140,14 @@ class MediaFile {
     ];
 
     if (adultKeywords.any((k) => lower.contains(k))) return ContentType.adult;
-    if (animeKeywords.any((k) => lower.contains(k))) return ContentType.anime;
+    if (animeKeywords.any((k) => lower.contains(k)) || 
+        lower.contains('bleach') || 
+        lower.contains('thousand-year blood war')) return ContentType.anime;
 
     return ContentType.general;
   }
 
-  static MediaKind _detectMediaKind(String name) {
+  static MediaKind detectMediaKind(String name) {
     final lower = name.toLowerCase();
     if (['.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a'].any(lower.endsWith)) {
       return MediaKind.audio;
@@ -157,8 +159,16 @@ class MediaFile {
         r'\bseason[ ._-]*\d{1,2}[ ._-]*episode[ ._-]*\d{1,3}\b',
         caseSensitive: false,
       ),
+      RegExp(r'\bep\d{1,3}\b', caseSensitive: false),
+      RegExp(r'\bepisode\s*\d{1,3}\b', caseSensitive: false),
+      RegExp(r'\s-\s\d{1,3}\b', caseSensitive: false), // Common anime format: "Show - 01"
     ];
     if (tvPatterns.any((p) => p.hasMatch(name))) return MediaKind.tv;
+
+    // Special case for known TV franchises
+    final tvKeywords = ['bleach', 'naruto', 'one piece', 'boruto', 'jujutsu', 'kaisen'];
+    if (tvKeywords.any((k) => lower.contains(k))) return MediaKind.tv;
+
     return MediaKind.movie;
   }
 

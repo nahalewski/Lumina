@@ -1041,6 +1041,26 @@ class MediaProvider extends ChangeNotifier {
         _mediaFiles = json
             .map((j) => MediaFile.fromJson(j as Map<String, dynamic>))
             .toList();
+            
+        // REPAIR: Re-classify existing files based on updated logic
+        bool changed = false;
+        for (int i = 0; i < _mediaFiles.length; i++) {
+          final oldKind = _mediaFiles[i].mediaKind;
+          final newKind = MediaFile.detectMediaKind(_mediaFiles[i].fileName);
+          if (oldKind != newKind) {
+            _mediaFiles[i] = _mediaFiles[i].copyWith(mediaKind: newKind);
+            changed = true;
+          }
+          
+          final oldType = _mediaFiles[i].contentType;
+          final newType = MediaFile.detectContentType(_mediaFiles[i].fileName);
+          if (oldType != newType) {
+            _mediaFiles[i] = _mediaFiles[i].copyWith(contentType: newType);
+            changed = true;
+          }
+        }
+        if (changed) _saveLibrary();
+        
         notifyListeners();
       }
     } catch (e) {
@@ -1052,6 +1072,9 @@ class MediaProvider extends ChangeNotifier {
     
     // Auto-start media server on launch
     await startMediaServer(port: 8080);
+
+    // Play menu music only if enabled in loaded settings
+    await playMenuMusic();
   }
 
   // ARCH-03: Save playback settings to disk

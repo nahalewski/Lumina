@@ -146,7 +146,6 @@ class _MainShellState extends State<MainShell> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final mediaProvider = Provider.of<MediaProvider>(context, listen: false);
       mediaProvider.checkInstalledModels();
-      mediaProvider.playMenuMusic();
     });
 
     SystemChrome.setSystemUIOverlayStyle(

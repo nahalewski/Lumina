@@ -80,6 +80,15 @@ class PlatformChannelService {
     }
   }
 
+  /// Toggle native fullscreen on macOS
+  Future<void> toggleFullscreen() async {
+    try {
+      await _channel.invokeMethod('toggleFullscreen');
+    } on PlatformException catch (e) {
+      print('Failed to toggle fullscreen: ${e.message}');
+    }
+  }
+
   /// Listen for audio chunks from native layer (for live transcription)
   Stream<Map<String, dynamic>> get audioChunkStream {
     _audioChunkStream ??= _audioChunkChannel

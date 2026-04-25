@@ -31,6 +31,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
   Timer? _controlsTimer;
   bool _isFullscreen = false;
   bool _showSpeedSelector = false;
+  bool _showQueue = false;
   final FocusNode _focusNode = FocusNode();
 
 
@@ -110,6 +111,10 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
       _isFullscreen = !_isFullscreen;
     });
     mediaProvider.toggleFullscreen();
+    
+    if (Platform.isMacOS) {
+      PlatformChannelService().toggleFullscreen();
+    }
     
     if (_isFullscreen) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
@@ -278,6 +283,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                       setState(() => _showDebugPanel = !_showDebugPanel);
                     },
                     onToggleFullscreen: _toggleFullscreen,
+                    onToggleQueue: () {
+                      setState(() => _showQueue = !_showQueue);
+                    },
                   ),
 
                   _BottomControls(
@@ -341,6 +349,16 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                     status: provider.processingStatus,
                     mode: provider.mode,
                     onTap: () => setState(() => _showDebugPanel = true),
+                  ),
+
+                if (_showQueue)
+                  _QueuePanel(
+                    mediaProvider: mediaProvider,
+                    onClose: () => setState(() => _showQueue = false),
+                    onSelectMedia: (media) {
+                      mediaProvider.playMedia(media, subtitleProvider: provider);
+                      setState(() => _showQueue = false);
+                    },
                   ),
               ],
             ),
@@ -656,6 +674,7 @@ class _TopControls extends StatelessWidget {
   final VoidCallback onToggleLearningMode;
   final VoidCallback onToggleDebug;
   final VoidCallback onToggleFullscreen;
+  final VoidCallback onToggleQueue;
 
   const _TopControls({
     required this.media,
@@ -666,6 +685,7 @@ class _TopControls extends StatelessWidget {
     required this.onToggleLearningMode,
     required this.onToggleDebug,
     required this.onToggleFullscreen,
+    required this.onToggleQueue,
   });
 
   @override
@@ -811,6 +831,12 @@ class _TopControls extends StatelessWidget {
               icon: isFullscreen ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded,
               tooltip: isFullscreen ? 'Exit Fullscreen' : 'Fullscreen',
               onPressed: onToggleFullscreen,
+            ),
+            const SizedBox(width: 4),
+            _IconButton(
+              icon: Icons.queue_play_next_rounded,
+              tooltip: 'Playback Queue',
+              onPressed: onToggleQueue,
             ),
             const SizedBox(width: 4),
             _IconButton(
@@ -1863,6 +1889,136 @@ class _ProcessingBanner extends StatelessWidget {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _QueuePanel extends StatelessWidget {
+  final MediaProvider mediaProvider;
+  final VoidCallback onClose;
+  final Function(MediaFile) onSelectMedia;
+
+  const _QueuePanel({
+    required this.mediaProvider,
+    required this.onClose,
+    required this.onSelectMedia,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final queue = mediaProvider.playbackQueue;
+    final currentMedia = mediaProvider.currentMedia;
+
+    return Positioned(
+      top: 64,
+      right: 16,
+      bottom: 100,
+      child: Container(
+        width: 320,
+        decoration: BoxDecoration(
+          color: const Color(0xFF131315).withValues(alpha: 0.95),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.5),
+              blurRadius: 30,
+            ),
+          ],
+        ),
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Playback Queue',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      fontFamily: 'Manrope',
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close_rounded, color: Colors.white54),
+                    onPressed: onClose,
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: queue.isEmpty
+                  ? Center(
+                      child: Text(
+                        'Queue is empty',
+                        style: TextStyle(color: Colors.white.withValues(alpha: 0.3)),
+                      ),
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      itemCount: queue.length,
+                      itemBuilder: (context, index) {
+                        final media = queue[index];
+                        final isCurrent = media.id == currentMedia?.id;
+
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 4),
+                          decoration: BoxDecoration(
+                            color: isCurrent
+                                ? const Color(0xFFE9B3FF).withValues(alpha: 0.1)
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: ListTile(
+                            leading: ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: media.thumbnailPath != null
+                                  ? Image.file(
+                                      File(media.thumbnailPath!),
+                                      width: 48,
+                                      height: 32,
+                                      fit: BoxFit.cover,
+                                    )
+                                  : Container(
+                                      width: 48,
+                                      height: 32,
+                                      color: Colors.white.withValues(alpha: 0.05),
+                                      child: const Icon(Icons.movie_rounded,
+                                          size: 16, color: Colors.white24),
+                                    ),
+                            ),
+                            title: Text(
+                              media.displayTitle,
+                              style: TextStyle(
+                                color: isCurrent ? const Color(0xFFE9B3FF) : Colors.white,
+                                fontSize: 13,
+                                fontWeight:
+                                    isCurrent ? FontWeight.bold : FontWeight.normal,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: Text(
+                              media.durationFormatted,
+                              style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.4), fontSize: 11),
+                            ),
+                            onTap: () => onSelectMedia(media),
+                            trailing: isCurrent
+                                ? const Icon(Icons.play_arrow_rounded,
+                                    color: Color(0xFFE9B3FF), size: 20)
+                                : null,
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
         ),
       ),
     );

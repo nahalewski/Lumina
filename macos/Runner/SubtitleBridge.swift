@@ -56,6 +56,9 @@ public class SubtitleBridge: NSObject, FlutterStreamHandler {
         case "requestMicrophonePermission":
             requestMicrophonePermission(result: result)
             
+        case "toggleFullscreen":
+            toggleFullscreen(result: result)
+            
         default:
             result(FlutterMethodNotImplemented)
         }
@@ -278,6 +281,18 @@ public class SubtitleBridge: NSObject, FlutterStreamHandler {
             }
         } else {
             result(true)
+        }
+    }
+    
+    private func toggleFullscreen(result: @escaping FlutterResult) {
+        DispatchQueue.main.async {
+            // Find the main window of the application
+            if let window = NSApplication.shared.windows.first(where: { $0.isVisible && $0.className.contains("Window") }) ?? NSApplication.shared.mainWindow ?? NSApplication.shared.windows.first {
+                window.toggleFullScreen(nil)
+                result(true)
+            } else {
+                result(false)
+            }
         }
     }
 }
