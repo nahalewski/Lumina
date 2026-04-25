@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<manifest xmlns="http://tizen.org/ns/packages" package="org.lumina.media" version="1.0.0" api-version="6.5">
+    <profile name="tv"/>
+    <ui-application appid="org.lumina.media" exec="Runner.so" multiple="false" nodisplay="false" taskmanage="true" type="dotnet">
+        <label>Lumina Media</label>
+        <icon>icon.png</icon>
+        <metadata key="http://tizen.org/metadata/use_node" value="true"/>
+    </ui-application>
+    <privileges>
+        <privilege>http://tizen.org/privilege/internet</privilege>
+        <privilege>http://tizen.org/privilege/mediastorage</privilege>
+        <privilege>http://tizen.org/privilege/externalstorage</privilege>
+    </privileges>
+</manifest>

@@ -1,0 +1,21 @@
+{
+  "info": "This is a generated file; do not edit or check into version control.",
+  "plugins": [],
+  "dart": {
+    "version": "3.11.1"
+  },
+  "flutter": {
+    "version": "3.41.4",
+    "revision": "ff37bef603"
+  },
+  "flutter-tizen": {
+    "revision": "8c0a006024"
+  },
+  "engine": {
+    "revision": "e4b8dca3f1"
+  },
+  "embedder": {
+    "revision": "fcea92ce78"
+  },
+  "date_created": "2026-04-25 19:28:41.293959"
+}

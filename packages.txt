@@ -1,0 +1,56 @@
+Error : Invalid command usage.
+Package Manager (0.5.50)
+
+Usage: package-manager-cli.bin(exe) <command> [option]...
+Command:
+       install                install new packages.
+       update                 update the installed packages.
+       uninstall              uninstall the installed packages.
+       show-info              display the installed information.
+       show-pkgs              display packages.
+       show-repo-info         display selected repository or sdk image information.
+       show-license           display software license agreement.
+       extra                  listing,adding,modifying,removing,activating and deactivating extra server.
+       self-update            update package manager to the latest available version. 
+
+Command Usage:
+       install [--accept-license] [--no-java-check] [--proxy <value>] [-f <SDK image path>] [-p <password>] <package name>[,...]
+       update  [--accept-license] [--no-java-check] [--proxy <value>] [-f <SDK image path>] [-p <password>] [--latest]
+       uninstall [-p <password>] <package name>[,...]|--all
+       show-info
+       show-pkgs [--proxy <value>] [--tree]
+       show-license [package name[,...]]
+       show-repo-info -r <address> [-d <distribution>] [--limit <number>|--latest|-s <snapshot>] [--proxy <value>] [--tree]
+       show-repo-info -f <SDK image path> [--tree]
+       extra <index[,...]>
+       extra --list [--detail]
+       extra -act|-dact <index[,...]>
+       extra --add -n <name> -r <address>|-f <extra path>
+       extra --modify <index> [-n <name>] [-r <address>|-f <extra path>]
+       extra --remove <index[,...]>       
+   
+Options:
+         --all                       		uninstall all packages.       
+         --accept-license            		accept license agreement.
+         --no-java-check             		skip java version check. 
+  -f,    --file <SDK image path>     		set SDK image file path.
+  -p,    --password <password>        		password for sudo authentication.
+                                      		some packages are required sudo authentication 
+                                      		to install/update or uninstall. 
+         --proxy <value>             		set proxy information.
+                                   		(direct|auto|ip:port)
+  -r,    --repository <address>      		set repository address.
+  -d,    --distribution <distribution>		set distribution name.
+  -s,    --snapshot <snapshot>       		set snapshot name.
+         --limit <number>            		set limit number of snapshot.
+         --latest                    		set latest snapshot.
+                                     		(Work on show-repo-info,update)
+         --tree                       		display packages with tree.
+  -act,  --activate                  		activate extra server.(work on "extra")
+  -dact, --deactivate                 		deactivate extra server.(work on "extra")
+         --list                    		listing extra server (work on "extra")
+         --detail                   		show detail information of extra server (work on "extra")
+         --add                      		add new extra server (work on "extra")
+         --modify                   		modify existing extra server (work on "extra")
+         --remove                   		remove existing extra server (work on "extra")          
+
