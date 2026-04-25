@@ -10,6 +10,7 @@ import '../providers/subtitle_provider.dart';
 import '../models/media_model.dart';
 import '../models/subtitle_model.dart';
 import '../widgets/subtitle_overlay.dart';
+import '../services/platform_channel_service.dart';
 
 /// Now Playing screen - video player with subtitle overlay
 /// Uses video_player package for in-app video rendering
@@ -356,7 +357,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                     mediaProvider: mediaProvider,
                     onClose: () => setState(() => _showQueue = false),
                     onSelectMedia: (media) {
-                      mediaProvider.playMedia(media, subtitleProvider: provider);
+                      mediaProvider.playMedia(media);
                       setState(() => _showQueue = false);
                     },
                   ),

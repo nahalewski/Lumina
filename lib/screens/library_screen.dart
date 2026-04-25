@@ -41,6 +41,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             onBack: () => setState(() => _selectedShow = null),
             onPlay: (episode) => _play(provider, episode),
             onQueue: (episode) => _queue(provider, episode),
+            onDelete: (episode) => _confirmDelete(provider, episode),
           );
         }
 
@@ -69,16 +70,18 @@ class _LibraryScreenState extends State<LibraryScreen> {
             ),
             Expanded(
               child: _section == _LibrarySection.movies
-                  ? _MoviesGrid(
-                      movies: movies,
-                      onPlay: (movie) => _play(provider, movie),
-                      onQueue: (movie) => _queue(provider, movie),
-                    )
-                  : _ShowsGrid(
-                      shows: shows,
-                      onOpenShow: (title) =>
-                          setState(() => _selectedShow = title),
-                    ),
+                    ? _MoviesGrid(
+                        movies: movies,
+                        onPlay: (movie) => _play(provider, movie),
+                        onQueue: (movie) => _queue(provider, movie),
+                        onDelete: (movie) => _confirmDelete(provider, movie),
+                      )
+                    : _ShowsGrid(
+                        shows: shows,
+                        onOpenShow: (title) =>
+                            setState(() => _selectedShow = title),
+                        onDelete: (media) => _confirmDelete(provider, media),
+                      ),
             ),
           ],
         );
@@ -119,6 +122,39 @@ class _LibraryScreenState extends State<LibraryScreen> {
         content: Text('${media.displayTitle} added to queue'),
         duration: const Duration(seconds: 2),
         backgroundColor: const Color(0xFF0A84FF),
+      ),
+    );
+  }
+
+  void _confirmDelete(MediaProvider provider, MediaFile media) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E22),
+        title: const Text('Remove from Library?', style: TextStyle(color: Colors.white)),
+        content: Text(
+          'Are you sure you want to remove "${media.displayTitle}"? This will not delete the actual file from your disk.',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white38)),
+          ),
+          TextButton(
+            onPressed: () {
+              provider.removeMediaFile(media);
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Removed ${media.displayTitle}'),
+                  backgroundColor: Colors.redAccent,
+                ),
+              );
+            },
+            child: const Text('Remove', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
       ),
     );
   }
@@ -409,6 +445,13 @@ class _SearchAndFilters extends StatelessWidget {
                             provider.setFilter(LibraryFilter.anime),
                       ),
                       _FilterChip(
+                        label: 'Hentai',
+                        selected:
+                            provider.currentFilter == LibraryFilter.hentai,
+                        onSelected: () =>
+                            provider.setFilter(LibraryFilter.hentai),
+                      ),
+                      _FilterChip(
                         label: 'General',
                         selected:
                             provider.currentFilter == LibraryFilter.general,
@@ -503,11 +546,13 @@ class _MoviesGrid extends StatelessWidget {
   final List<MediaFile> movies;
   final ValueChanged<MediaFile> onPlay;
   final ValueChanged<MediaFile> onQueue;
+  final ValueChanged<MediaFile> onDelete;
 
   const _MoviesGrid({
     required this.movies,
     required this.onPlay,
     required this.onQueue,
+    required this.onDelete,
   });
 
   @override
@@ -532,6 +577,7 @@ class _MoviesGrid extends StatelessWidget {
         subtitle: _movieSubtitle(movies[index]),
         onTap: () => onPlay(movies[index]),
         onQueue: () => onQueue(movies[index]),
+        onDelete: () => onDelete(movies[index]),
       ),
     );
   }
@@ -550,8 +596,13 @@ class _MoviesGrid extends StatelessWidget {
 class _ShowsGrid extends StatelessWidget {
   final Map<String, List<MediaFile>> shows;
   final ValueChanged<String> onOpenShow;
+  final ValueChanged<MediaFile> onDelete;
 
-  const _ShowsGrid({required this.shows, required this.onOpenShow});
+  const _ShowsGrid({
+    required this.shows,
+    required this.onOpenShow,
+    required this.onDelete,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -582,6 +633,7 @@ class _ShowsGrid extends StatelessWidget {
           seasons: seasons,
           coverUrl: episodes.first.posterUrl ?? episodes.first.coverArtUrl,
           onTap: () => onOpenShow(title),
+          onDelete: () => onDelete(episodes.first),
         );
       },
     );
@@ -594,6 +646,7 @@ class _ShowDetailView extends StatelessWidget {
   final VoidCallback onBack;
   final ValueChanged<MediaFile> onPlay;
   final ValueChanged<MediaFile> onQueue;
+  final ValueChanged<MediaFile> onDelete;
 
   const _ShowDetailView({
     required this.showTitle,
@@ -601,6 +654,7 @@ class _ShowDetailView extends StatelessWidget {
     required this.onBack,
     required this.onPlay,
     required this.onQueue,
+    required this.onDelete,
   });
 
   @override
@@ -685,6 +739,7 @@ class _ShowDetailView extends StatelessWidget {
                 episodes: season.value,
                 onPlay: onPlay,
                 onQueue: onQueue,
+                onDelete: onDelete,
               );
             }).toList(),
           ),
@@ -699,12 +754,14 @@ class _SeasonBlock extends StatelessWidget {
   final List<MediaFile> episodes;
   final ValueChanged<MediaFile> onPlay;
   final ValueChanged<MediaFile> onQueue;
+  final ValueChanged<MediaFile> onDelete;
 
   const _SeasonBlock({
     required this.seasonNumber,
     required this.episodes,
     required this.onPlay,
     required this.onQueue,
+    required this.onDelete,
   });
 
   @override
@@ -731,6 +788,7 @@ class _SeasonBlock extends StatelessWidget {
               episode: episode,
               onTap: () => onPlay(episode),
               onAddToQueue: () => onQueue(episode),
+              onDelete: () => onDelete(episode),
             ),
           ),
         ],
@@ -744,21 +802,27 @@ class _PosterCard extends StatelessWidget {
   final String subtitle;
   final VoidCallback onTap;
   final VoidCallback onQueue;
+  final VoidCallback onDelete;
 
   const _PosterCard({
     required this.media,
     required this.subtitle,
     required this.onTap,
     required this.onQueue,
+    required this.onDelete,
   });
 
   @override
   Widget build(BuildContext context) {
     final imageUrl = media.posterUrl ?? media.coverArtUrl;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
-      child: Column(
+    return GestureDetector(
+      onSecondaryTapDown: (details) {
+        _showContextMenu(context, details.globalPosition, onDelete);
+      },
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
@@ -794,8 +858,9 @@ class _PosterCard extends StatelessWidget {
             ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 }
 
 class _ShowCard extends StatelessWidget {
@@ -804,6 +869,7 @@ class _ShowCard extends StatelessWidget {
   final int seasons;
   final String? coverUrl;
   final VoidCallback onTap;
+  final VoidCallback onDelete;
 
   const _ShowCard({
     required this.title,
@@ -811,14 +877,19 @@ class _ShowCard extends StatelessWidget {
     required this.seasons,
     required this.coverUrl,
     required this.onTap,
+    required this.onDelete,
   });
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
-      child: Column(
+    return GestureDetector(
+      onSecondaryTapDown: (details) {
+        _showContextMenu(context, details.globalPosition, onDelete);
+      },
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
@@ -835,14 +906,15 @@ class _ShowCard extends StatelessWidget {
               fontWeight: FontWeight.w800,
             ),
           ),
-          Text(
-            '$seasons seasons | $episodes episodes',
-            style: const TextStyle(color: Colors.white38, fontSize: 12),
-          ),
+            Text(
+              '$seasons seasons | $episodes episodes',
+              style: const TextStyle(color: Colors.white38, fontSize: 12),
+            ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 }
 
 class _ArtworkFrame extends StatelessWidget {
@@ -940,11 +1012,13 @@ class _EpisodeTile extends StatelessWidget {
   final MediaFile episode;
   final VoidCallback onTap;
   final VoidCallback onAddToQueue;
+  final VoidCallback onDelete;
 
   const _EpisodeTile({
     required this.episode,
     required this.onTap,
     required this.onAddToQueue,
+    required this.onDelete,
   });
 
   @override
@@ -957,10 +1031,14 @@ class _EpisodeTile extends StatelessWidget {
         episode.episodeTitle ?? episode.parsedEpisodeTitle ?? episode.fileName;
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Container(
+      child: GestureDetector(
+        onSecondaryTapDown: (details) {
+          _showContextMenu(context, details.globalPosition, onDelete);
+        },
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             color: Colors.white.withValues(alpha: 0.035),
@@ -1031,8 +1109,9 @@ class _EpisodeTile extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 }
 
 class _EpisodeThumb extends StatelessWidget {
@@ -1240,4 +1319,31 @@ class _EmptyState extends StatelessWidget {
       ),
     );
   }
+}
+
+void _showContextMenu(BuildContext context, Offset position, VoidCallback onDelete) {
+  showMenu(
+    context: context,
+    position: RelativeRect.fromLTRB(
+      position.dx,
+      position.dy,
+      position.dx,
+      position.dy,
+    ),
+    color: const Color(0xFF1E1E22),
+    elevation: 8,
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+    items: [
+      PopupMenuItem(
+        onTap: onDelete,
+        child: const Row(
+          children: [
+            Icon(Icons.delete_outline_rounded, color: Colors.redAccent, size: 18),
+            SizedBox(width: 10),
+            Text('Remove from Library', style: TextStyle(color: Colors.redAccent, fontSize: 13)),
+          ],
+        ),
+      ),
+    ],
+  );
 }

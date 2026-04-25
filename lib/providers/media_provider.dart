@@ -37,7 +37,7 @@ enum LibraryFilter {
   processed,
   unprocessed,
   anime,
-  adult,
+  hentai,
   general,
 }
 
@@ -198,7 +198,7 @@ class MediaProvider extends ChangeNotifier {
         videos =
             videos.where((m) => m.contentType == ContentType.anime).toList();
         break;
-      case LibraryFilter.adult:
+      case LibraryFilter.hentai:
         videos =
             videos.where((m) => m.contentType == ContentType.adult).toList();
         break;
