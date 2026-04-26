@@ -4,20 +4,32 @@ import '../models/media_model.dart';
 import '../providers/media_provider.dart';
 import '../providers/subtitle_provider.dart';
 
-enum _LibrarySection { movies, tv }
+enum LibrarySection { movies, tv, music }
 
 class LibraryScreen extends StatefulWidget {
   final VoidCallback? onPlayMedia;
-  const LibraryScreen({super.key, this.onPlayMedia});
+  final LibrarySection? initialSection;
+  const LibraryScreen({super.key, this.onPlayMedia, this.initialSection});
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
 }
 
 class _LibraryScreenState extends State<LibraryScreen> {
-  _LibrarySection _section = _LibrarySection.movies;
+  late LibrarySection _section;
   String? _selectedShow;
+  
+  // Music Sub-navigation
+  String? _selectedArtist;
+  Map<String, dynamic>? _selectedAlbum;
+
   final TextEditingController _searchController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _section = widget.initialSection ?? LibrarySection.movies;
+  }
 
   @override
   void dispose() {
@@ -32,6 +44,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
         provider.setSubtitleProvider(subtitleProvider);
         final movies = provider.movieFiles;
         final tvFiles = provider.tvFiles;
+        final musicFiles = provider.audioFiles;
         final shows = _groupShows(tvFiles);
 
         if (_selectedShow != null) {
@@ -53,10 +66,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
               movieCount: movies.length,
               showCount: shows.length,
               episodeCount: tvFiles.length,
+              musicCount: musicFiles.length,
               isLoading: provider.isLoading,
               onSectionChanged: (section) => setState(() {
                 _section = section;
                 _selectedShow = null;
+                _selectedArtist = null;
+                _selectedAlbum = null;
               }),
               onScan: provider.scanLibraryMetadata,
               onAdd: provider.pickMediaFiles,
@@ -64,25 +80,42 @@ class _LibraryScreenState extends State<LibraryScreen> {
             _SearchAndFilters(
               controller: _searchController,
               provider: provider,
-              hint: _section == _LibrarySection.movies
+              hint: _section == LibrarySection.movies
                   ? 'Search movies, actors, genres, files...'
-                  : 'Search shows, seasons, episodes, actors...',
+                  : _section == LibrarySection.tv
+                      ? 'Search shows, seasons, episodes, actors...'
+                      : 'Search songs, artists, albums...',
             ),
             Expanded(
-              child: _section == _LibrarySection.movies
-                    ? _MoviesGrid(
-                        movies: movies,
-                        onPlay: (movie) => _play(provider, movie),
-                        onQueue: (movie) => _queue(provider, movie),
-                        onDelete: (movie) => _confirmDelete(provider, movie),
-                      )
-                    : _ShowsGrid(
-                        shows: shows,
-                        onOpenShow: (title) =>
-                            setState(() => _selectedShow = title),
-                        onDelete: (media) => _confirmDelete(provider, media),
-                      ),
+              child: _section == LibrarySection.movies
+                  ? _MoviesGrid(
+                      movies: movies,
+                      onPlay: (movie) => _play(provider, movie),
+                      onQueue: (movie) => _queue(provider, movie),
+                      onDelete: (movie) => _confirmDelete(provider, movie),
+                    )
+                  : _section == LibrarySection.tv
+                      ? _ShowsGrid(
+                          shows: shows,
+                          onOpenShow: (title) =>
+                              setState(() => _selectedShow = title),
+                          onDelete: (media) => _confirmDelete(provider, media),
+                        )
+                      : _MusicLibraryView(
+                          music: musicFiles,
+                          selectedArtist: _selectedArtist,
+                          selectedAlbum: _selectedAlbum,
+                          onArtistSelected: (artist) => setState(() => _selectedArtist = artist),
+                          onAlbumSelected: (album) => setState(() => _selectedAlbum = album),
+                          onBackToArtists: () => setState(() => _selectedArtist = null),
+                          onBackToAlbums: () => setState(() => _selectedAlbum = null),
+                          onPlay: (song) => _play(provider, song),
+                          onQueue: (song) => _queue(provider, song),
+                          onDelete: (song) => _confirmDelete(provider, song),
+                        ),
             ),
+            if (_section == LibrarySection.music && provider.currentMedia?.mediaKind == MediaKind.audio)
+              _MusicPlayerBar(provider: provider),
           ],
         );
       },
@@ -112,7 +145,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   void _play(MediaProvider provider, MediaFile media) {
     provider.playMedia(media);
-    widget.onPlayMedia?.call();
+    if (media.mediaKind != MediaKind.audio) {
+      widget.onPlayMedia?.call();
+    }
   }
 
   void _queue(MediaProvider provider, MediaFile media) {
@@ -161,12 +196,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
 }
 
 class _Header extends StatelessWidget {
-  final _LibrarySection section;
+  final LibrarySection section;
   final int movieCount;
   final int showCount;
   final int episodeCount;
+  final int musicCount;
   final bool isLoading;
-  final ValueChanged<_LibrarySection> onSectionChanged;
+  final ValueChanged<LibrarySection> onSectionChanged;
   final VoidCallback onScan;
   final VoidCallback onAdd;
 
@@ -175,6 +211,7 @@ class _Header extends StatelessWidget {
     required this.movieCount,
     required this.showCount,
     required this.episodeCount,
+    required this.musicCount,
     required this.isLoading,
     required this.onSectionChanged,
     required this.onScan,
@@ -200,7 +237,9 @@ class _Header extends StatelessWidget {
                 ),
               ),
               Text(
-                '$movieCount movies | $showCount shows | $episodeCount episodes',
+                section == LibrarySection.music 
+                    ? '$musicCount songs'
+                    : '$movieCount movies | $showCount shows | $episodeCount episodes',
                 style: const TextStyle(color: Colors.white38, fontSize: 13),
               ),
             ],
@@ -210,8 +249,9 @@ class _Header extends StatelessWidget {
             runSpacing: 10,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              _SegmentedLibraryTabs(
-                  section: section, onChanged: onSectionChanged),
+              if (section != LibrarySection.music)
+                _SegmentedLibraryTabs(
+                    section: section, onChanged: onSectionChanged),
               _HeaderButton(
                 icon: Icons.refresh_rounded,
                 label: 'Scan Metadata',
@@ -252,8 +292,8 @@ class _Header extends StatelessWidget {
 }
 
 class _SegmentedLibraryTabs extends StatelessWidget {
-  final _LibrarySection section;
-  final ValueChanged<_LibrarySection> onChanged;
+  final LibrarySection section;
+  final ValueChanged<LibrarySection> onChanged;
 
   const _SegmentedLibraryTabs({required this.section, required this.onChanged});
 
@@ -271,14 +311,14 @@ class _SegmentedLibraryTabs extends StatelessWidget {
           _TabButton(
             icon: Icons.movie_rounded,
             label: 'Movies',
-            selected: section == _LibrarySection.movies,
-            onTap: () => onChanged(_LibrarySection.movies),
+            selected: section == LibrarySection.movies,
+            onTap: () => onChanged(LibrarySection.movies),
           ),
           _TabButton(
             icon: Icons.tv_rounded,
             label: 'TV Shows',
-            selected: section == _LibrarySection.tv,
-            onTap: () => onChanged(_LibrarySection.tv),
+            selected: section == LibrarySection.tv,
+            onTap: () => onChanged(LibrarySection.tv),
           ),
         ],
       ),
@@ -1321,6 +1361,786 @@ class _EmptyState extends StatelessWidget {
   }
 }
 
+class _MusicLibraryView extends StatelessWidget {
+  final List<MediaFile> music;
+  final String? selectedArtist;
+  final Map<String, dynamic>? selectedAlbum;
+  final ValueChanged<String> onArtistSelected;
+  final ValueChanged<Map<String, dynamic>> onAlbumSelected;
+  final VoidCallback onBackToArtists;
+  final VoidCallback onBackToAlbums;
+  final ValueChanged<MediaFile> onPlay;
+  final ValueChanged<MediaFile> onQueue;
+  final ValueChanged<MediaFile> onDelete;
+
+  const _MusicLibraryView({
+    required this.music,
+    this.selectedArtist,
+    this.selectedAlbum,
+    required this.onArtistSelected,
+    required this.onAlbumSelected,
+    required this.onBackToArtists,
+    required this.onBackToAlbums,
+    required this.onPlay,
+    required this.onQueue,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (selectedAlbum != null) {
+      return _AlbumDetailView(
+        album: selectedAlbum!,
+        onBack: onBackToAlbums,
+      );
+    }
+
+    if (selectedArtist != null) {
+      return _AlbumGrid(
+        artistName: selectedArtist!,
+        onAlbumSelected: onAlbumSelected,
+        onBack: onBackToArtists,
+      );
+    }
+
+    return _ArtistGrid(
+      music: music,
+      onArtistSelected: onArtistSelected,
+      onPlay: onPlay,
+      onQueue: onQueue,
+      onDelete: onDelete,
+    );
+  }
+}
+
+class _ArtistGrid extends StatefulWidget {
+  final List<MediaFile> music;
+  final ValueChanged<String> onArtistSelected;
+  final ValueChanged<MediaFile> onPlay;
+  final ValueChanged<MediaFile> onQueue;
+  final ValueChanged<MediaFile> onDelete;
+
+  const _ArtistGrid({
+    required this.music,
+    required this.onArtistSelected,
+    required this.onPlay,
+    required this.onQueue,
+    required this.onDelete,
+  });
+
+  @override
+  State<_ArtistGrid> createState() => _ArtistGridState();
+}
+
+class _ArtistGridState extends State<_ArtistGrid> {
+  List<Map<String, dynamic>> _discoveryArtists = [];
+  bool _isLoadingDiscovery = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDiscovery();
+  }
+
+  Future<void> _loadDiscovery() async {
+    final provider = Provider.of<MediaProvider>(context, listen: false);
+    final artists = await provider.getDiscoveryArtists();
+    if (mounted) {
+      setState(() {
+        _discoveryArtists = artists;
+        _isLoadingDiscovery = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = Provider.of<MediaProvider>(context);
+    final ytResults = provider.youtubeSearchResults;
+    final isSearchingYt = provider.isSearchingYoutube;
+    final suggestions = provider.searchSuggestions;
+    final hasSearch = provider.searchQuery.isNotEmpty;
+
+    // Group local music by artist
+    final Map<String, List<MediaFile>> artistGroups = {};
+    for (var song in widget.music) {
+      final artist = song.artist ?? "Unknown Artist";
+      artistGroups.putIfAbsent(artist, () => []).add(song);
+    }
+    final localArtists = artistGroups.keys.toList()..sort();
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),
+      children: [
+        if (hasSearch && suggestions.isNotEmpty) ...[
+          const _SubHeader(title: 'Suggestions'),
+          const SizedBox(height: 12),
+          ...suggestions.map((s) => _SuggestionTile(
+            suggestion: s,
+            onTap: () {
+              provider.setSearchQuery(s['name']);
+              // Also trigger a YouTube search for this specific suggestion
+            },
+          )),
+          const SizedBox(height: 24),
+        ],
+
+        if (hasSearch && (ytResults.isNotEmpty || isSearchingYt)) ...[
+          const _SubHeader(title: 'From YouTube'),
+          const SizedBox(height: 12),
+          if (isSearchingYt)
+            const Center(child: Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator()))
+          else
+            ...ytResults.map((yt) => _YoutubeResultTile(
+              result: yt,
+              onDownload: () => provider.downloadAndAddMusic(yt),
+            )),
+          const SizedBox(height: 32),
+        ],
+
+        if (_discoveryArtists.isNotEmpty) ...[
+          const _SubHeader(title: 'Discover Artists'),
+          const SizedBox(height: 16),
+          _ArtistHorizontalGrid(
+            artists: _discoveryArtists,
+            onArtistSelected: widget.onArtistSelected,
+          ),
+          const SizedBox(height: 32),
+        ],
+        
+        const _SubHeader(title: 'Your Artists'),
+        const SizedBox(height: 16),
+        GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: 160,
+            childAspectRatio: 0.8,
+            crossAxisSpacing: 20,
+            mainAxisSpacing: 20,
+          ),
+          itemCount: localArtists.length,
+          itemBuilder: (context, index) {
+            final artist = localArtists[index];
+            final firstSong = artistGroups[artist]!.first;
+            return _ArtistCard(
+              artist: artist,
+              artworkUrl: firstSong.posterUrl ?? firstSong.coverArtUrl,
+              onTap: () => widget.onArtistSelected(artist),
+            );
+          },
+        ),
+
+        if (widget.music.isNotEmpty) ...[
+          const SizedBox(height: 32),
+          const _SubHeader(title: 'All Songs'),
+          const SizedBox(height: 12),
+          ...widget.music.map((song) => _MusicTile(
+            song: song,
+            onTap: () => widget.onPlay(song),
+            onAddToQueue: () => widget.onQueue(song),
+            onDelete: () => widget.onDelete(song),
+          )),
+        ],
+      ],
+    );
+  }
+}
+
+class _ArtistHorizontalGrid extends StatelessWidget {
+  final List<Map<String, dynamic>> artists;
+  final ValueChanged<String> onArtistSelected;
+
+  const _ArtistHorizontalGrid({required this.artists, required this.onArtistSelected});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 140,
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        itemCount: artists.length,
+        itemBuilder: (context, index) {
+          final artist = artists[index];
+          return Padding(
+            padding: const EdgeInsets.only(right: 20),
+            child: SizedBox(
+              width: 100,
+              child: _ArtistCard(
+                artist: artist['name'],
+                artworkUrl: artist['imageUrl'],
+                onTap: () => onArtistSelected(artist['name']),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _ArtistCard extends StatelessWidget {
+  final String artist;
+  final String? artworkUrl;
+  final VoidCallback onTap;
+
+  const _ArtistCard({required this.artist, this.artworkUrl, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Column(
+        children: [
+          Expanded(
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(80),
+                color: Colors.white10,
+                image: artworkUrl != null
+                    ? DecorationImage(image: NetworkImage(artworkUrl!), fit: BoxFit.cover)
+                    : null,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.2),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: artworkUrl == null
+                  ? const Icon(Icons.person_rounded, color: Colors.white24, size: 40)
+                  : null,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            artist,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AlbumGrid extends StatelessWidget {
+  final String artistName;
+  final ValueChanged<Map<String, dynamic>> onAlbumSelected;
+  final VoidCallback onBack;
+
+  const _AlbumGrid({
+    required this.artistName,
+    required this.onAlbumSelected,
+    required this.onBack,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = Provider.of<MediaProvider>(context);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(32, 16, 32, 0),
+          child: TextButton.icon(
+            onPressed: onBack,
+            icon: const Icon(Icons.arrow_back_rounded, size: 18),
+            label: const Text('Back to Artists'),
+            style: TextButton.styleFrom(foregroundColor: const Color(0xFFAAC7FF)),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(32, 8, 32, 16),
+          child: Text(
+            '$artistName Albums',
+            style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800),
+          ),
+        ),
+        Expanded(
+          child: FutureBuilder<List<Map<String, dynamic>>>(
+            future: provider.getArtistAlbums(artistName),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              final albums = snapshot.data ?? [];
+              if (albums.isEmpty) {
+                return const Center(child: Text('No albums found on Spotify', style: TextStyle(color: Colors.white38)));
+              }
+              return GridView.builder(
+                padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),
+                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: 200,
+                  childAspectRatio: 0.75,
+                  crossAxisSpacing: 20,
+                  mainAxisSpacing: 20,
+                ),
+                itemCount: albums.length,
+                itemBuilder: (context, index) {
+                  final album = albums[index];
+                  return InkWell(
+                    onTap: () => onAlbumSelected(album),
+                    borderRadius: BorderRadius.circular(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(12),
+                            child: album['imageUrl'] != null
+                                ? Image.network(album['imageUrl'], fit: BoxFit.cover)
+                                : Container(color: Colors.white10),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          album['name'],
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                        ),
+                        Text(
+                          album['releaseDate']?.split('-')?.first ?? "",
+                          style: const TextStyle(color: Colors.white38, fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AlbumDetailView extends StatelessWidget {
+  final Map<String, dynamic> album;
+  final VoidCallback onBack;
+
+  const _AlbumDetailView({required this.album, required this.onBack});
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = Provider.of<MediaProvider>(context);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(32, 16, 32, 0),
+          child: TextButton.icon(
+            onPressed: onBack,
+            icon: const Icon(Icons.arrow_back_rounded, size: 18),
+            label: const Text('Back to Albums'),
+            style: TextButton.styleFrom(foregroundColor: const Color(0xFFAAC7FF)),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(32, 16, 32, 24),
+          child: Row(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: album['imageUrl'] != null
+                    ? Image.network(album['imageUrl'], width: 140, height: 140, fit: BoxFit.cover)
+                    : Container(width: 140, height: 140, color: Colors.white10),
+              ),
+              const SizedBox(width: 24),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      album['name'],
+                      style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text('Album', style: TextStyle(color: Colors.white38, fontSize: 14)),
+                    const SizedBox(height: 16),
+                    ElevatedButton.icon(
+                      onPressed: () {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Downloading "${album['name']}" from YouTube...'), backgroundColor: const Color(0xFF0A84FF)),
+                        );
+                        provider.downloadAlbum(album);
+                      },
+                      icon: const Icon(Icons.download_rounded, size: 16),
+                      label: const Text('Download Album'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF0A84FF),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: FutureBuilder<List<Map<String, dynamic>>>(
+            future: provider.getAlbumTracks(album['id']),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              final tracks = snapshot.data ?? [];
+              return ListView.builder(
+                padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),
+                itemCount: tracks.length,
+                itemBuilder: (context, index) {
+                  final track = tracks[index];
+                  return _AlbumTrackTile(
+                    track: track,
+                    onTap: () async {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Downloading "${track['name']}"...'), backgroundColor: const Color(0xFF0A84FF)),
+                      );
+                      final query = "${track['name']} ${album['name']}";
+                      final ytResults = await provider.searchYoutubeDiscovery("$query music");
+                      if (ytResults.isNotEmpty) {
+                         provider.downloadAndAddMusic(ytResults.first, artworkUrl: album['imageUrl']);
+                      } else {
+                         provider.downloadAndAddMusic({'title': track['name'], 'url': 'ytsearch:${track['name']} ${album['name']}'}, artworkUrl: album['imageUrl']);
+                      }
+                    },
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AlbumTrackTile extends StatelessWidget {
+  final Map<String, dynamic> track;
+  final VoidCallback onTap;
+
+  const _AlbumTrackTile({required this.track, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      onTap: onTap,
+      contentPadding: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
+      leading: Text(
+        '${track['trackNumber']}',
+        style: const TextStyle(color: Colors.white38, fontSize: 14),
+      ),
+      title: Text(
+        track['name'],
+        style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
+      ),
+      trailing: const Icon(Icons.download_rounded, color: Colors.white24, size: 18),
+    );
+  }
+}
+
+class _SubHeader extends StatelessWidget {
+  final String title;
+  const _SubHeader({required this.title});
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      title.toUpperCase(),
+      style: TextStyle(
+        color: const Color(0xFFAAC7FF).withValues(alpha: 0.8),
+        fontSize: 11,
+        fontWeight: FontWeight.bold,
+        letterSpacing: 1.5,
+      ),
+    );
+  }
+}
+
+class _YoutubeResultTile extends StatefulWidget {
+  final Map<String, String> result;
+  final Future<void> Function() onDownload;
+
+  const _YoutubeResultTile({required this.result, required this.onDownload});
+
+  @override
+  State<_YoutubeResultTile> createState() => _YoutubeResultTileState();
+}
+
+class _YoutubeResultTileState extends State<_YoutubeResultTile> {
+  bool _isDownloading = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.02),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.04)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(6),
+                color: Colors.redAccent.withValues(alpha: 0.1),
+              ),
+              child: const Icon(Icons.play_arrow_rounded, color: Colors.redAccent, size: 24),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.result['title'] ?? 'Unknown Video',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
+                  ),
+                  const Text(
+                    'YouTube Music',
+                    style: TextStyle(color: Colors.white24, fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
+            if (_isDownloading)
+              const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+            else
+              IconButton(
+                onPressed: () async {
+                  setState(() => _isDownloading = true);
+                  await widget.onDownload();
+                  if (mounted) setState(() => _isDownloading = false);
+                },
+                icon: const Icon(Icons.download_rounded, color: Color(0xFF0A84FF), size: 20),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MusicTile extends StatelessWidget {
+  final MediaFile song;
+  final VoidCallback onTap;
+  final VoidCallback onAddToQueue;
+  final VoidCallback onDelete;
+
+  const _MusicTile({
+    required this.song,
+    required this.onTap,
+    required this.onAddToQueue,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final artworkUrl = song.posterUrl ?? song.coverArtUrl;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: GestureDetector(
+        onSecondaryTapDown: (details) => _showContextMenu(context, details.globalPosition, onDelete),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.03),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(6),
+                    color: const Color(0xFFE9B3FF).withValues(alpha: 0.1),
+                    image: artworkUrl != null
+                        ? DecorationImage(image: NetworkImage(artworkUrl), fit: BoxFit.cover)
+                        : null,
+                  ),
+                  child: artworkUrl == null
+                      ? const Icon(Icons.music_note_rounded, color: Color(0xFFE9B3FF), size: 24)
+                      : null,
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        song.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700),
+                      ),
+                      Text(
+                        '${song.artist ?? "Unknown Artist"} • ${song.album ?? "Unknown Album"}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.white38, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+                Text(
+                  song.durationFormatted,
+                  style: const TextStyle(color: Colors.white30, fontSize: 12),
+                ),
+                const SizedBox(width: 12),
+                IconButton(
+                  onPressed: onAddToQueue,
+                  icon: const Icon(Icons.queue_rounded, color: Colors.white24, size: 20),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MusicPlayerBar extends StatelessWidget {
+  final MediaProvider provider;
+
+  const _MusicPlayerBar({required this.provider});
+
+  @override
+  Widget build(BuildContext context) {
+    final media = provider.currentMedia;
+    if (media == null) return const SizedBox.shrink();
+
+    return Container(
+      height: 80,
+      margin: const EdgeInsets.fromLTRB(32, 0, 32, 32),
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E1E22),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.4),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(6),
+              image: (media.posterUrl ?? media.coverArtUrl) != null
+                  ? DecorationImage(
+                      image: NetworkImage(media.posterUrl ?? media.coverArtUrl!),
+                      fit: BoxFit.cover,
+                    )
+                  : null,
+              color: Colors.white10,
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  media.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700),
+                ),
+                Text(
+                  media.artist ?? "Unknown Artist",
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white38, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.skip_previous_rounded, color: Colors.white70),
+                onPressed: provider.previous,
+              ),
+              ValueListenableBuilder<bool>(
+                valueListenable: provider.isPlaying,
+                builder: (context, isPlaying, _) {
+                  return IconButton(
+                    iconSize: 40,
+                    icon: Icon(
+                      isPlaying ? Icons.pause_circle_filled_rounded : Icons.play_circle_filled_rounded,
+                      color: const Color(0xFFAAC7FF),
+                    ),
+                    onPressed: isPlaying ? provider.pause : provider.resume,
+                  );
+                },
+              ),
+              IconButton(
+                icon: const Icon(Icons.skip_next_rounded, color: Colors.white70),
+                onPressed: provider.next,
+              ),
+            ],
+          ),
+          const SizedBox(width: 20),
+          SizedBox(
+            width: 200,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                ValueListenableBuilder<Duration>(
+                  valueListenable: provider.currentPosition,
+                  builder: (context, position, _) {
+                    return ValueListenableBuilder<Duration>(
+                      valueListenable: provider.totalDuration,
+                      builder: (context, duration, _) {
+                        final total = duration.inMilliseconds > 0 ? duration.inMilliseconds : 1;
+                        return Slider(
+                          value: position.inMilliseconds.toDouble().clamp(0, total.toDouble()),
+                          max: total.toDouble(),
+                          onChanged: (val) => provider.seek(Duration(milliseconds: val.toInt())),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 void _showContextMenu(BuildContext context, Offset position, VoidCallback onDelete) {
   showMenu(
     context: context,
@@ -1346,4 +2166,42 @@ void _showContextMenu(BuildContext context, Offset position, VoidCallback onDele
       ),
     ],
   );
+}
+
+class _SuggestionTile extends StatelessWidget {
+  final Map<String, dynamic> suggestion;
+  final VoidCallback onTap;
+
+  const _SuggestionTile({required this.suggestion, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      onTap: onTap,
+      contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 12),
+      leading: Container(
+        width: 32,
+        height: 32,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(4),
+          color: Colors.white10,
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: suggestion['imageUrl'] != null
+              ? Image.network(suggestion['imageUrl'], fit: BoxFit.cover)
+              : const Icon(Icons.music_note_rounded, size: 16, color: Colors.white24),
+        ),
+      ),
+      title: Text(
+        suggestion['name'],
+        style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+      ),
+      subtitle: Text(
+        suggestion['type'] == 'Track' ? 'Song • ${suggestion['artist']}' : 'Artist',
+        style: const TextStyle(color: Colors.white38, fontSize: 11),
+      ),
+      trailing: const Icon(Icons.north_west_rounded, size: 14, color: Colors.white24),
+    );
+  }
 }

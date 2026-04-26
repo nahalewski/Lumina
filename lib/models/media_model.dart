@@ -42,6 +42,11 @@ class MediaFile {
   final List<String> castPhotoUrls;
   final List<String> directors;
   final List<String> writers;
+  
+  // Music-specific fields
+  final String? artist;
+  final String? album;
+  final int? trackNumber;
 
   // Backward-compatible anime fields
   final String? animeId;
@@ -92,6 +97,9 @@ class MediaFile {
     this.episode,
     this.coverArtUrl,
     this.description,
+    this.artist,
+    this.album,
+    this.trackNumber,
   })  : addedAt = addedAt ?? DateTime.now(),
         contentType = contentType ?? detectContentType(fileName),
         mediaKind = mediaKind ?? detectMediaKind(fileName),
@@ -121,9 +129,15 @@ class MediaFile {
       'eng sub',
       'jap sub',
       'sennen kessen',
+      '[',
+      ']',
+      'horriblesubs',
+      'subs',
+      'dub',
     ];
     final adultKeywords = [
       'uncensored',
+      'censored',
       'hentai',
       'porn',
       'adult',
@@ -132,11 +146,7 @@ class MediaFile {
       '18+',
       'jav',
       'leak',
-      'brazzers',
-      'bang',
-      'cum',
-      'cock',
-      'pussy',
+      'xxx',
     ];
 
     if (adultKeywords.any((k) => lower.contains(k))) return ContentType.adult;
@@ -175,6 +185,9 @@ class MediaFile {
   String get extension => fileName.split('.').last.toLowerCase();
   String get title => fileName.replaceAll('.$extension', '');
   String get libraryTitle {
+    if (mediaKind == MediaKind.audio) {
+      return (artist != null) ? '$artist - $title' : title;
+    }
     if (mediaKind == MediaKind.tv) {
       return showTitle ?? animeTitle ?? parsedShowTitle ?? title;
     }
@@ -241,6 +254,9 @@ class MediaFile {
         'episode': episode,
         'coverArtUrl': coverArtUrl,
         'description': description,
+        'artist': artist,
+        'album': album,
+        'trackNumber': trackNumber,
       };
 
   factory MediaFile.fromJson(Map<String, dynamic> json) => MediaFile(
@@ -287,8 +303,11 @@ class MediaFile {
         animeTitle: json['animeTitle'],
         season: json['season'],
         episode: json['episode'],
-        coverArtUrl: json['coverArtUrl'],
-        description: json['description'],
+        coverArtUrl: json['coverArtUrl'] as String?,
+        description: json['description'] as String?,
+        artist: json['artist'] as String?,
+        album: json['album'] as String?,
+        trackNumber: json['trackNumber'] as int?,
       );
 
   MediaFile copyWith({
@@ -326,49 +345,56 @@ class MediaFile {
     int? episode,
     String? coverArtUrl,
     String? description,
-  }) =>
-      MediaFile(
-        id: id,
-        filePath: filePath,
-        fileName: fileName,
-        thumbnailPath: thumbnailPath,
-        duration: duration,
-        addedAt: addedAt,
-        isFavorite: isFavorite ?? this.isFavorite,
-        contentType: contentType ?? this.contentType,
-        mediaKind: mediaKind ?? this.mediaKind,
-        isWatched: isWatched ?? this.isWatched,
-        playCount: playCount ?? this.playCount,
-        resolution: resolution ?? this.resolution,
-        language: language ?? this.language,
-        subtitleTracks: subtitleTracks ?? this.subtitleTracks,
-        audioTracks: audioTracks ?? this.audioTracks,
-        metadataId: metadataId ?? this.metadataId,
-        movieTitle: movieTitle ?? this.movieTitle,
-        showTitle: showTitle ?? this.showTitle,
-        episodeTitle: episodeTitle ?? this.episodeTitle,
-        synopsis: synopsis ?? this.synopsis,
-        posterUrl: posterUrl ?? this.posterUrl,
-        backdropUrl: backdropUrl ?? this.backdropUrl,
-        thumbnailUrl: thumbnailUrl ?? this.thumbnailUrl,
-        seasonPosterUrl: seasonPosterUrl ?? this.seasonPosterUrl,
-        trailerUrl: trailerUrl ?? this.trailerUrl,
-        releaseDate: releaseDate ?? this.releaseDate,
-        airDate: airDate ?? this.airDate,
-        releaseYear: releaseYear ?? this.releaseYear,
-        rating: rating ?? this.rating,
-        genres: genres ?? this.genres,
-        cast: cast ?? this.cast,
-        castPhotoUrls: castPhotoUrls ?? this.castPhotoUrls,
-        directors: directors ?? this.directors,
-        writers: writers ?? this.writers,
-        animeId: animeId ?? this.animeId,
-        animeTitle: animeTitle ?? this.animeTitle,
-        season: season ?? this.season,
-        episode: episode ?? this.episode,
-        coverArtUrl: coverArtUrl ?? this.coverArtUrl,
-        description: description ?? this.description,
-      );
+    String? artist,
+    String? album,
+    int? trackNumber,
+  }) {
+    return MediaFile(
+      id: id,
+      filePath: filePath,
+      fileName: fileName,
+      thumbnailPath: thumbnailPath,
+      duration: duration,
+      addedAt: addedAt,
+      isFavorite: isFavorite ?? this.isFavorite,
+      contentType: contentType ?? this.contentType,
+      mediaKind: mediaKind ?? this.mediaKind,
+      isWatched: isWatched ?? this.isWatched,
+      playCount: playCount ?? this.playCount,
+      resolution: resolution ?? this.resolution,
+      language: language ?? this.language,
+      subtitleTracks: subtitleTracks ?? this.subtitleTracks,
+      audioTracks: audioTracks ?? this.audioTracks,
+      metadataId: metadataId ?? this.metadataId,
+      movieTitle: movieTitle ?? this.movieTitle,
+      showTitle: showTitle ?? this.showTitle,
+      episodeTitle: episodeTitle ?? this.episodeTitle,
+      synopsis: synopsis ?? this.synopsis,
+      posterUrl: posterUrl ?? this.posterUrl,
+      backdropUrl: backdropUrl ?? this.backdropUrl,
+      thumbnailUrl: thumbnailUrl ?? this.thumbnailUrl,
+      seasonPosterUrl: seasonPosterUrl ?? this.seasonPosterUrl,
+      trailerUrl: trailerUrl ?? this.trailerUrl,
+      releaseDate: releaseDate ?? this.releaseDate,
+      airDate: airDate ?? this.airDate,
+      releaseYear: releaseYear ?? this.releaseYear,
+      rating: rating ?? this.rating,
+      genres: genres ?? this.genres,
+      cast: cast ?? this.cast,
+      castPhotoUrls: castPhotoUrls ?? this.castPhotoUrls,
+      directors: directors ?? this.directors,
+      writers: writers ?? this.writers,
+      animeId: animeId ?? this.animeId,
+      animeTitle: animeTitle ?? this.animeTitle,
+      season: season ?? this.season,
+      episode: episode ?? this.episode,
+      coverArtUrl: coverArtUrl ?? this.coverArtUrl,
+      description: description ?? this.description,
+      artist: artist ?? this.artist,
+      album: album ?? this.album,
+      trackNumber: trackNumber ?? this.trackNumber,
+    );
+  }
 }
 
 class ParsedEpisodeInfo {
@@ -447,7 +473,8 @@ class PlaybackSettings {
   bool useOllamaTranslation = true;
   bool autoProcessNewMedia = true;
   bool enableIntro = true;
-  bool enableMenuMusic = true; // New setting for background music
+  bool enableMenuMusic = true;
+  String? musicSavePath;
   String ollamaModel = 'qwen2.5:14b-instruct';
   TranslationProfile translationProfile = TranslationProfile.standard;
   bool isFullscreen = false;
@@ -466,6 +493,7 @@ class PlaybackSettings {
         'autoProcessNewMedia': autoProcessNewMedia,
         'enableIntro': enableIntro,
         'enableMenuMusic': enableMenuMusic,
+        'musicSavePath': musicSavePath,
         'ollamaModel': ollamaModel,
         'translationProfile': translationProfile.index,
         'isFullscreen': isFullscreen,
@@ -481,6 +509,7 @@ class PlaybackSettings {
     settings.autoProcessNewMedia = json['autoProcessNewMedia'] ?? true;
     settings.enableIntro = json['enableIntro'] ?? true;
     settings.enableMenuMusic = json['enableMenuMusic'] ?? true;
+    settings.musicSavePath = json['musicSavePath'];
     settings.ollamaModel = json['ollamaModel'] ?? 'qwen2.5:14b-instruct';
     settings.translationProfile = json['translationProfile'] != null
         ? TranslationProfile.values[json['translationProfile']]

@@ -11,6 +11,10 @@ class RemoteMediaFile {
   final Duration duration;
   final String? coverArtUrl;
   final bool isVideo;
+  final bool isAudio;
+  final String? artist;
+  final String? album;
+  final int? trackNumber;
 
   RemoteMediaFile({
     required this.id,
@@ -20,6 +24,10 @@ class RemoteMediaFile {
     required this.duration,
     this.coverArtUrl,
     required this.isVideo,
+    required this.isAudio,
+    this.artist,
+    this.album,
+    this.trackNumber,
   });
 
   factory RemoteMediaFile.fromJson(Map<String, dynamic> json) {
@@ -31,6 +39,10 @@ class RemoteMediaFile {
       duration: Duration(milliseconds: json['duration'] as int),
       coverArtUrl: json['coverArtUrl'] as String?,
       isVideo: json['isVideo'] as bool,
+      isAudio: json['isAudio'] as bool,
+      artist: json['artist'] as String?,
+      album: json['album'] as String?,
+      trackNumber: json['trackNumber'] as int?,
     );
   }
 }

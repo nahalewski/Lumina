@@ -139,6 +139,12 @@ class SideNavBar extends StatelessWidget {
             isSelected: selectedIndex == 5,
             onTap: () => onItemSelected(5),
           ),
+          _NavItem(
+            icon: Icons.library_music_rounded,
+            label: 'Music Library',
+            isSelected: selectedIndex == 9,
+            onTap: () => onItemSelected(9),
+          ),
           // ─── IPTV Section ──────────────────────────────────────────────
           Padding(
             padding: const EdgeInsets.fromLTRB(24, 16, 24, 4),

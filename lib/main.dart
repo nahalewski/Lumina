@@ -18,6 +18,7 @@ import 'screens/basic_player_screen.dart';
 import 'screens/iptv_live_screen.dart';
 import 'screens/iptv_movies_screen.dart';
 import 'screens/iptv_series_screen.dart';
+import 'screens/remote_library_screen.dart';
 import 'screens/tv/tv_main_shell.dart';
 import 'widgets/falling_particles.dart';
 
@@ -139,6 +140,8 @@ class _MainShellState extends State<MainShell> {
   int _selectedNavIndex = 0;
   bool _showNowPlaying = false;
 
+  bool get _isMobile => Platform.isAndroid || Platform.isIOS;
+
   @override
   void initState() {
     super.initState();
@@ -170,6 +173,39 @@ class _MainShellState extends State<MainShell> {
 
   @override
   Widget build(BuildContext context) {
+    if (_isMobile) {
+      return Scaffold(
+        body: FallingFlowersBackground(
+          child: SafeArea(
+            child: _buildMobileContent(),
+          ),
+        ),
+        bottomNavigationBar: Theme(
+          data: Theme.of(context).copyWith(
+            canvasColor: const Color(0xFF131315).withValues(alpha: 0.95),
+          ),
+          child: BottomNavigationBar(
+            currentIndex: _selectedNavIndex > 5 ? 0 : _selectedNavIndex, // Fallback for indices not in bottom bar
+            onTap: (index) {
+              setState(() {
+                _selectedNavIndex = index;
+              });
+            },
+            type: BottomNavigationBarType.fixed,
+            selectedItemColor: const Color(0xFFE9B3FF),
+            unselectedItemColor: Colors.white38,
+            backgroundColor: const Color(0xFF131315),
+            items: const [
+              BottomNavigationBarItem(icon: Icon(Icons.home_rounded), label: 'Home'),
+              BottomNavigationBarItem(icon: Icon(Icons.library_music_rounded), label: 'Music'),
+              BottomNavigationBarItem(icon: Icon(Icons.live_tv_rounded), label: 'IPTV'),
+              BottomNavigationBarItem(icon: Icon(Icons.settings_rounded), label: 'Settings'),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       body: FallingFlowersBackground(
         child: Row(
@@ -187,8 +223,6 @@ class _MainShellState extends State<MainShell> {
             Expanded(
               child: Column(
                 children: [
-                  // Main content - use IndexedStack for non-IPTV screens (keeps state),
-                  // lazy-load IPTV screens to avoid freezing UI with thousands of network images
                   Expanded(
                     child: _selectedNavIndex == 6
                         ? const IptvLiveScreen()
@@ -196,8 +230,8 @@ class _MainShellState extends State<MainShell> {
                             ? const IptvMoviesScreen()
                             : _selectedNavIndex == 8
                                 ? const IptvSeriesScreen()
-                                : IndexedStack(
-                                    index: _selectedNavIndex,
+                                  : IndexedStack(
+                                    index: _selectedNavIndex == 9 ? 6 : _selectedNavIndex,
                                     children: [
                                       LibraryScreen(onPlayMedia: _navigateToNowPlaying), // 0 - Home
                                       const WebBrowserScreen(),                         // 1 - Web Browser
@@ -205,6 +239,10 @@ class _MainShellState extends State<MainShell> {
                                       const SettingsScreen(),                          // 3 - Settings
                                       NowPlayingScreen(onBack: _navigateBack),          // 4 - Now Playing
                                       const VocabularyScreen(),                        // 5 - Vocabulary
+                                      LibraryScreen(                                   // 6 (sidebar 9) - Music Library
+                                        onPlayMedia: _navigateToNowPlaying,
+                                        initialSection: LibrarySection.music,
+                                      ),
                                     ],
                                   ),
                   ),
@@ -215,6 +253,24 @@ class _MainShellState extends State<MainShell> {
         ),
       ),
     );
+  }
+
+  Widget _buildMobileContent() {
+    // Map bottom bar index to main nav indices
+    switch (_selectedNavIndex) {
+      case 0: // Home
+        return const RemoteLibraryScreen();
+      case 1: // Music
+        return const RemoteLibraryScreen(
+          initialSection: RemoteLibrarySection.music,
+        );
+      case 2: // IPTV (Live)
+        return const IptvLiveScreen();
+      case 3: // Settings
+        return const SettingsScreen();
+      default:
+        return const RemoteLibraryScreen();
+    }
   }
 
   Widget _buildPage() {

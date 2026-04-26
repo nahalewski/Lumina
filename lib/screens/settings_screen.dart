@@ -112,6 +112,13 @@ class SettingsScreen extends StatelessWidget {
               ),
               _buildSection(
                 context,
+                'Music Library',
+                [
+                  _MusicSettingsTile(),
+                ],
+              ),
+              _buildSection(
+                context,
                 'Media Server',
                 [
                   _MediaServerTile(),
@@ -130,6 +137,13 @@ class SettingsScreen extends StatelessWidget {
 
                 [
                   _buildModelManager(context),
+                ],
+              ),
+              _buildSection(
+                context,
+                'Dependencies',
+                [
+                  _YtDlpTile(),
                 ],
               ),
               _buildSection(
@@ -1481,6 +1495,139 @@ class _MediaServerTile extends StatelessWidget {
           letterSpacing: 0.5,
         ),
       ),
+    );
+  }
+}
+
+class _MusicSettingsTile extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final provider = Provider.of<MediaProvider>(context);
+    final path = provider.settings.musicSavePath ?? 'Not set (defaults to App Documents/Music)';
+
+    return ListTile(
+      contentPadding: const EdgeInsets.all(16),
+      leading: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: const Color(0xFFAAC7FF).withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: const Icon(Icons.folder_copy_rounded, color: Color(0xFFAAC7FF), size: 20),
+      ),
+      title: const Text(
+        'Default Music Save Location',
+        style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
+      ),
+      subtitle: Text(
+        path,
+        style: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 12),
+      ),
+      trailing: IconButton(
+        icon: const Icon(Icons.edit_rounded, color: Color(0xFFAAC7FF), size: 20),
+        onPressed: () async {
+          String? selectedDirectory = await FilePicker.getDirectoryPath();
+          if (selectedDirectory != null) {
+            provider.setMusicSavePath(selectedDirectory);
+          }
+        },
+      ),
+    );
+  }
+}
+
+class _YtDlpTile extends StatefulWidget {
+  @override
+  State<_YtDlpTile> createState() => _YtDlpTileState();
+}
+
+class _YtDlpTileState extends State<_YtDlpTile> {
+  bool _isInstalling = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = Provider.of<MediaProvider>(context);
+    final os = Platform.isMacOS ? 'macOS' : (Platform.isWindows ? 'Windows' : 'Unknown OS');
+
+    return FutureBuilder<bool>(
+      future: provider.isYtDlpInstalled(),
+      builder: (context, snapshot) {
+        final isInstalled = snapshot.data ?? false;
+
+        return Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFB4AB).withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.get_app_rounded, color: Color(0xFFFFB4AB), size: 20),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'yt-dlp (YouTube Downloader)',
+                          style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
+                        ),
+                        Text(
+                          'Required for searching and downloading music from YouTube. Detected: $os',
+                          style: TextStyle(color: Colors.white38, fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              if (_isInstalling)
+                const Center(child: CircularProgressIndicator())
+              else
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      setState(() => _isInstalling = true);
+                      try {
+                        await provider.installYtDlp();
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('yt-dlp installed successfully'), backgroundColor: Color(0xFF42E355)),
+                          );
+                        }
+                      } catch (e) {
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Installation failed: $e'), backgroundColor: Colors.redAccent),
+                          );
+                        }
+                      } finally {
+                        if (mounted) setState(() => _isInstalling = false);
+                      }
+                    },
+                    icon: Icon(isInstalled ? Icons.check_circle_rounded : Icons.install_desktop_rounded, size: 16),
+                    label: Text(isInstalled ? 'Reinstall yt-dlp' : 'Install yt-dlp Dependencies'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: isInstalled ? const Color(0xFF42E355) : const Color(0xFFAAC7FF),
+                      side: BorderSide(color: (isInstalled ? const Color(0xFF42E355) : const Color(0xFFAAC7FF)).withValues(alpha: 0.3)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

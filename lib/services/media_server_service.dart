@@ -438,6 +438,9 @@ class MediaServerService {
       'episode': media.episode,
       'coverArtUrl': media.coverArtUrl,
       'description': media.description,
+      'artist': media.artist,
+      'album': media.album,
+      'trackNumber': media.trackNumber,
       'hasSubtitles': File('${media.filePath.replaceAll(RegExp(r'\.[^.]+$'), '')}.srt').existsSync(),
       'fileSize': File(media.filePath).existsSync() ? File(media.filePath).lengthSync() : 0,
     };

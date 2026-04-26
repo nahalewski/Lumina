@@ -14,6 +14,8 @@ import '../services/artwork_scraper_service.dart';
 import '../services/media_server_service.dart';
 import '../services/cloudflare_tunnel_service.dart';
 import 'iptv_provider.dart';
+import '../services/spotify_service.dart';
+import '../services/ytdlp_service.dart';
 
 /// Sort options for the library
 enum LibrarySort {
@@ -62,6 +64,7 @@ class MediaProvider extends ChangeNotifier {
   bool _isIntroPlaying = false;
   VideoPlayerController? _musicController;
   Timer? _saveDebounce; // BUG-03: debounce library saves
+  Timer? _searchDebounce;
 
   // Track background processing for new library items
   final Map<String, String> _processingStatus = {};
@@ -73,6 +76,8 @@ class MediaProvider extends ChangeNotifier {
   final Map<String, double> _downloadProgress = {};
   final MetadataService _metadataService = MetadataService();
   final ArtworkScraperService _artworkScraper = ArtworkScraperService();
+  final SpotifyService _spotifyService = SpotifyService();
+  final YtDlpService _ytdlpService = YtDlpService();
 
   // ─── Media Server (Remote Access) ─────────────────────────────────────
 
@@ -139,10 +144,24 @@ class MediaProvider extends ChangeNotifier {
   Duration _lastSyncedPosition =
       Duration.zero; // Jitter fix: skip trivial updates
 
+  List<Map<String, String>> _youtubeSearchResults = [];
+  List<Map<String, String>> get youtubeSearchResults => _youtubeSearchResults;
+  bool _isSearchingYoutube = false;
+  bool get isSearchingYoutube => _isSearchingYoutube;
+
+  List<Map<String, dynamic>> _searchSuggestions = [];
+  List<Map<String, dynamic>> get searchSuggestions => _searchSuggestions;
+
   // ─── Smart Filters Getters (#10) ──────────────────────────────────────
   LibrarySort get currentSort => _currentSort;
   LibraryFilter get currentFilter => _currentFilter;
   String get searchQuery => _searchQuery;
+
+  List<MediaFile> get movieFiles => filteredAndSortedVideos.where((m) => m.mediaKind == MediaKind.movie).toList();
+  List<MediaFile> get tvFiles => filteredAndSortedVideos.where((m) => m.mediaKind == MediaKind.tv).toList();
+  List<MediaFile> get audioFiles => filteredAndSortedVideos.where((m) => m.mediaKind == MediaKind.audio).toList();
+  List<MediaFile> get favoriteFiles => _mediaFiles.where((m) => m.isFavorite).toList();
+  List<MediaFile> get videoFiles => _mediaFiles.where((m) => m.isVideo).toList();
 
   void setSort(LibrarySort sort) {
     _currentSort = sort;
@@ -156,12 +175,95 @@ class MediaProvider extends ChangeNotifier {
 
   void setSearchQuery(String query) {
     _searchQuery = query;
+    _searchDebounce?.cancel();
+    
+    if (_searchQuery.length > 2) {
+      _searchDebounce = Timer(const Duration(milliseconds: 500), () {
+        _searchYoutube(_searchQuery);
+        _fetchSuggestions(_searchQuery);
+      });
+    } else {
+      _youtubeSearchResults = [];
+      _searchSuggestions = [];
+    }
     notifyListeners();
   }
 
+  Future<void> _fetchSuggestions(String query) async {
+    _searchSuggestions = await _spotifyService.getSearchSuggestions(query);
+    notifyListeners();
+  }
+
+  Future<void> _searchYoutube(String query) async {
+    if (_isSearchingYoutube) return;
+    _isSearchingYoutube = true;
+    notifyListeners();
+
+    try {
+      // Append "music" to ensure we get music-related results for the predictive search
+      final musicQuery = "$query music";
+      final results = await _ytdlpService.searchYouTube(musicQuery);
+      _youtubeSearchResults = results;
+    } catch (e) {
+      debugPrint('YouTube search error: $e');
+    } finally {
+      _isSearchingYoutube = false;
+      notifyListeners();
+    }
+  }
+
+  Future<List<Map<String, String>>> searchYoutubeDiscovery(String query) async {
+    return await _ytdlpService.searchYouTube(query);
+  }
+
+  Future<void> downloadAndAddMusic(Map<String, String> ytResult, {String? artworkUrl}) async {
+    String? saveDir = _settings.musicSavePath;
+    if (saveDir == null) {
+      final appDir = await getApplicationDocumentsDirectory();
+      saveDir = '${appDir.path}/Music';
+      final dir = Directory(saveDir);
+      if (!await dir.exists()) await dir.create(recursive: true);
+    }
+
+    final filePath = await _ytdlpService.downloadMusic(ytResult['url']!, saveDir);
+    if (filePath != null) {
+      final fileName = filePath.split('/').last;
+      await _addMediaFile(filePath, fileName, artworkUrl: artworkUrl);
+    }
+  }
+
+  Future<void> downloadAlbum(Map<String, dynamic> album) async {
+    final tracks = await getAlbumTracks(album['id']);
+    for (var track in tracks) {
+      final query = "${track['name']} ${album['name']}";
+      final ytResults = await _ytdlpService.searchYouTube("$query music");
+      if (ytResults.isNotEmpty) {
+        await downloadAndAddMusic(ytResults.first, artworkUrl: album['imageUrl']);
+      }
+    }
+  }
+
+  Future<void> installYtDlp() async {
+    await _ytdlpService.install();
+    notifyListeners();
+  }
+
+  Future<bool> isYtDlpInstalled() => _ytdlpService.isInstalled();
+
+  void setMusicSavePath(String path) {
+    _settings.musicSavePath = path;
+    _saveSettings();
+    notifyListeners();
+  }
+
+  Future<List<Map<String, dynamic>>> getArtistAlbums(String artistName) => _spotifyService.getArtistAlbums(artistName);
+  Future<List<Map<String, dynamic>>> getAlbumTracks(String albumId) => _spotifyService.getAlbumTracks(albumId);
+  Future<List<Map<String, dynamic>>> getDiscoveryArtists() => _spotifyService.getDiscoveryArtists();
+  Future<List<Map<String, dynamic>>> getDiscoveryAlbums() => _spotifyService.getDiscoveryAlbums();
+
   /// Computed list of videos with filter + sort + search applied
   List<MediaFile> get filteredAndSortedVideos {
-    var videos = _mediaFiles.where((m) => m.isVideo).toList();
+    var videos = _mediaFiles;
 
     // Apply filter
     switch (_currentFilter) {
@@ -269,14 +371,6 @@ class MediaProvider extends ChangeNotifier {
 
     return videos;
   }
-
-  List<MediaFile> get movieFiles => filteredAndSortedVideos
-      .where((m) => m.mediaKind == MediaKind.movie)
-      .toList();
-
-  List<MediaFile> get tvFiles => filteredAndSortedVideos
-      .where((m) => m.mediaKind == MediaKind.tv)
-      .toList();
 
   // ─── Playlist / Queue Getters (#3) ────────────────────────────────────
   List<MediaFile> get playbackQueue => List.unmodifiable(_playbackQueue);
@@ -404,13 +498,6 @@ class MediaProvider extends ChangeNotifier {
   Map<String, String> get processingStatus => _processingStatus;
   Map<String, double> get processingProgress => _processingProgress;
 
-  List<MediaFile> get videoFiles =>
-      _mediaFiles.where((m) => m.isVideo).toList();
-  List<MediaFile> get audioFiles =>
-      _mediaFiles.where((m) => m.isAudio).toList();
-  List<MediaFile> get favoriteFiles =>
-      _mediaFiles.where((m) => m.isFavorite).toList();
-
   /// Pick and load media files
   Future<void> pickMediaFiles() async {
     _isLoading = true;
@@ -515,7 +602,7 @@ class MediaProvider extends ChangeNotifier {
   }
 
   /// Add a media file to the library
-  Future<void> _addMediaFile(String filePath, String fileName) async {
+  Future<void> _addMediaFile(String filePath, String fileName, {String? artworkUrl}) async {
     if (_mediaFiles.any((m) => m.filePath == filePath)) return;
 
     var mediaFile = MediaFile(
@@ -526,13 +613,22 @@ class MediaProvider extends ChangeNotifier {
     );
 
     // Phase 4: Fetch Metadata
-    mediaFile = await _metadataService.enrichMediaFile(mediaFile);
+    if (mediaFile.isAudio) {
+      mediaFile = await _enrichAudioMetadata(mediaFile);
+    }
+    // Enrich
+    final enriched = await _metadataService.enrichMediaFile(mediaFile);
+    
+    // If we have a specific artwork from Spotify (discovery), override
+    final finalFile = artworkUrl != null 
+      ? enriched.copyWith(posterUrl: artworkUrl, coverArtUrl: artworkUrl)
+      : enriched;
 
-    _mediaFiles.add(mediaFile);
+    _mediaFiles.add(finalFile);
 
     // Automatically start processing for videos only if enabled
-    if (mediaFile.isVideo && _settings.autoProcessNewMedia) {
-      autoProcessMedia(mediaFile);
+    if (finalFile.isVideo && _settings.autoProcessNewMedia) {
+      autoProcessMedia(finalFile);
     }
 
     _saveLibrary();
@@ -555,7 +651,10 @@ class MediaProvider extends ChangeNotifier {
     notifyListeners();
 
     for (int i = 0; i < _mediaFiles.length; i++) {
-      if (_mediaFiles[i].animeTitle == null) {
+      if (_mediaFiles[i].isAudio && _mediaFiles[i].artist == null) {
+        _mediaFiles[i] = await _enrichAudioMetadata(_mediaFiles[i]);
+        notifyListeners();
+      } else if (_mediaFiles[i].mediaKind != MediaKind.audio && _mediaFiles[i].animeTitle == null) {
         _mediaFiles[i] = await _metadataService.enrichMediaFile(_mediaFiles[i]);
         notifyListeners();
       }
@@ -564,6 +663,29 @@ class MediaProvider extends ChangeNotifier {
     _isLoading = false;
     _saveLibrary();
     notifyListeners();
+  }
+
+  Future<MediaFile> _enrichAudioMetadata(MediaFile file) async {
+    final metadata = await _spotifyService.getTrackMetadata(file.fileName);
+    if (metadata != null) {
+      final artists = (metadata['artists'] as List).map((a) => a['name']).join(', ');
+      final album = metadata['album']['name'];
+      final artwork = metadata['album']['images'].isNotEmpty 
+          ? metadata['album']['images'][0]['url'] 
+          : null;
+      final releaseDate = metadata['album']['release_date'];
+      final trackNumber = metadata['track_number'];
+      
+      return file.copyWith(
+        artist: artists,
+        album: album,
+        posterUrl: artwork,
+        coverArtUrl: artwork,
+        releaseDate: releaseDate,
+        trackNumber: trackNumber,
+      );
+    }
+    return file;
   }
 
   /// Remove a media file from the library
@@ -962,11 +1084,43 @@ class MediaProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Toggle fullscreen
   void toggleFullscreen() {
     _settings.isFullscreen = !_settings.isFullscreen;
     _saveSettings();
     notifyListeners();
+  }
+
+  // ─── Playback Controls ────────────────────────────────────────────────
+  
+  void pause() {
+    _videoController?.pause();
+    notifyListeners();
+  }
+
+  void resume() {
+    _videoController?.play();
+    notifyListeners();
+  }
+
+  void togglePlay() {
+    if (_videoController?.value.isPlaying ?? false) {
+      pause();
+    } else {
+      resume();
+    }
+  }
+
+  void seek(Duration position) {
+    _videoController?.seekTo(position);
+  }
+
+  void next() {
+    playNextInQueue();
+  }
+
+  void previous() {
+    // Basic previous: just restart current if no history implemented yet
+    _videoController?.seekTo(Duration.zero);
   }
 
   // ─── Artwork Scraper ──────────────────────────────────────────────────

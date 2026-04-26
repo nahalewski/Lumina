@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/media_model.dart';
+import 'anilist_service.dart';
 
 /// Service to identify local media and enrich it from public metadata sources.
 class MetadataService {
@@ -8,6 +9,7 @@ class MetadataService {
   static const String _tmdbBaseUrl = 'https://api.themoviedb.org/3';
   static const String _tmdbImageBaseUrl = 'https://image.tmdb.org/t/p/w780';
   static const String _tmdbApiKey = String.fromEnvironment('TMDB_API_KEY');
+  final AnilistService _anilistService = AnilistService();
 
   /// Search for anime by title and return the best match
   Future<Map<String, dynamic>?> searchAnime(String query) async {
@@ -80,10 +82,54 @@ class MetadataService {
       if (tmdb != null) return tmdb;
     }
 
+    if (localFile.contentType == ContentType.adult) {
+      final hentai = await _anilistService.searchHentai(file.fileName);
+      if (hentai != null) {
+        return localFile.copyWith(
+          metadataId: 'anilist:${hentai['id']}',
+          animeTitle: hentai['title']['english'] ?? hentai['title']['romaji'],
+          showTitle: localFile.showTitle ?? hentai['title']['english'] ?? hentai['title']['romaji'],
+          mediaKind: inferredKind,
+          coverArtUrl: hentai['coverImage']['extraLarge'] ?? hentai['coverImage']['large'],
+          posterUrl: hentai['coverImage']['extraLarge'] ?? hentai['coverImage']['large'],
+          backdropUrl: hentai['bannerImage'],
+          description: hentai['description']?.replaceAll(RegExp(r'<[^>]*>|&[^;]+;'), ''),
+          synopsis: hentai['description']?.replaceAll(RegExp(r'<[^>]*>|&[^;]+;'), ''),
+          releaseYear: hentai['seasonYear'],
+          rating: (hentai['averageScore'] as num?)?.toDouble() != null ? (hentai['averageScore'] as num?)!.toDouble() / 10.0 : null,
+          genres: (hentai['genres'] as List?)?.cast<String>(),
+          season: localFile.season,
+          episode: localFile.episode,
+        );
+      }
+    }
+
     if (localFile.contentType != ContentType.anime) return localFile;
 
     final anime = await searchAnime(file.fileName);
-    if (anime == null) return localFile;
+    if (anime == null) {
+      // Fallback to AniList for non-Hentai anime if Jikan fails
+      final anilist = await _anilistService.searchAnime(file.fileName);
+      if (anilist != null) {
+        return localFile.copyWith(
+          metadataId: 'anilist:${anilist['id']}',
+          animeTitle: anilist['title']['english'] ?? anilist['title']['romaji'],
+          showTitle: localFile.showTitle ?? anilist['title']['english'] ?? anilist['title']['romaji'],
+          mediaKind: inferredKind,
+          coverArtUrl: anilist['coverImage']['extraLarge'] ?? anilist['coverImage']['large'],
+          posterUrl: anilist['coverImage']['extraLarge'] ?? anilist['coverImage']['large'],
+          backdropUrl: anilist['bannerImage'],
+          description: anilist['description']?.replaceAll(RegExp(r'<[^>]*>|&[^;]+;'), ''),
+          synopsis: anilist['description']?.replaceAll(RegExp(r'<[^>]*>|&[^;]+;'), ''),
+          releaseYear: anilist['seasonYear'],
+          rating: (anilist['averageScore'] as num?)?.toDouble() != null ? (anilist['averageScore'] as num?)!.toDouble() / 10.0 : null,
+          genres: (anilist['genres'] as List?)?.cast<String>(),
+          season: localFile.season,
+          episode: localFile.episode,
+        );
+      }
+      return localFile;
+    }
 
     return localFile.copyWith(
       animeId: anime['mal_id'].toString(),
