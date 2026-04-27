@@ -6,6 +6,24 @@ import '../providers/iptv_provider.dart';
 import '../services/iptv_service.dart';
 import 'iptv_player_screen.dart';
 
+// Sakura-themed palette for program blocks (one per channel slot, cycles)
+const List<Color> _kChannelColors = [
+  Color(0xFFE9B3FF), // sakura purple
+  Color(0xFFAAC7FF), // periwinkle
+  Color(0xFFFFD7F5), // rose pink
+  Color(0xFFFFB4AB), // coral
+  Color(0xFFB8EAA8), // mint
+  Color(0xFFFFD580), // golden
+  Color(0xFF94D4E9), // sky teal
+  Color(0xFFF0C0D4), // blush
+  Color(0xFFD4B8EA), // lavender
+  Color(0xFFA8DEBB), // seafoam
+];
+
+Color _colorForIndex(int i) => _kChannelColors[i % _kChannelColors.length];
+
+// ─── Main Screen ─────────────────────────────────────────────────────────────
+
 class IptvLiveScreen extends StatefulWidget {
   const IptvLiveScreen({super.key});
 
@@ -13,226 +31,71 @@ class IptvLiveScreen extends StatefulWidget {
   State<IptvLiveScreen> createState() => _IptvLiveScreenState();
 }
 
-class _IptvLiveScreenState extends State<IptvLiveScreen> with TickerProviderStateMixin {
+class _IptvLiveScreenState extends State<IptvLiveScreen> {
+  String? _selectedCategory;
+  bool _showDebugLog = false;
   String _searchQuery = '';
-  bool _isGuideView = true;
-  late TabController _tabController;
-
-  @override
-  void initState() {
-    super.initState();
-    _tabController = TabController(length: 3, vsync: this);
-  }
-
-  @override
-  void dispose() {
-    _tabController.dispose();
-    super.dispose();
-  }
-  final List<String> _filterOptions = [
-    'USA',
-    'Latino',
-    'Sports',
-    'Movies',
-    'XXX',
-    'News',
-    'Kids'
-  ];
-  final Set<String> _selectedFilters = {};
+  bool _isCategoriesView = true;
 
   @override
   Widget build(BuildContext context) {
     return Consumer<IptvProvider>(
       builder: (context, provider, _) {
+        if (provider.isLoading) {
+          return const Center(
+              child: CircularProgressIndicator(color: Color(0xFFE9B3FF)));
+        }
+
+        final channels = provider.liveChannels;
+        final categoryMap = <String, List<IptvMedia>>{};
+        for (final ch in channels) {
+          categoryMap.putIfAbsent(ch.group, () => []).add(ch);
+        }
+        final allCategories = categoryMap.keys.toList()..sort();
+
+        // If no category is selected, we show the category grid by default (IMG_0121)
+        if (_isCategoriesView || _selectedCategory == null) {
+          return _CategoryGrid(
+            categories: allCategories,
+            categoryMap: categoryMap,
+            provider: provider,
+            onCategorySelected: (cat) {
+              setState(() {
+                _selectedCategory = cat;
+                _isCategoriesView = false;
+              });
+            },
+          );
+        }
+
+        // Otherwise show the Guide View (IMG_0120)
+        final selectedChannels = _selectedCategory == 'All Channels'
+            ? channels
+            : (categoryMap[_selectedCategory] ?? []);
+            
+        final filteredChannels = _searchQuery.isEmpty
+            ? selectedChannels
+            : selectedChannels
+                .where((c) =>
+                    c.name.toLowerCase().contains(_searchQuery.toLowerCase()))
+                .toList();
+
         return Column(
           children: [
-            // Tab Bar
-            TabBar(
-              controller: _tabController,
-              labelColor: const Color(0xFFE9B3FF),
-              unselectedLabelColor: Colors.white54,
-              indicatorColor: const Color(0xFFE9B3FF),
-              tabs: const [
-                Tab(text: 'Live'),
-                Tab(text: 'Movies'),
-                Tab(text: 'Series'),
-              ],
+            _IptvGuideHeader(
+              selectedCategory: _selectedCategory!,
+              onCategoryTap: () => setState(() => _isCategoriesView = true),
+              searchQuery: _searchQuery,
+              onSearchChanged: (v) => setState(() => _searchQuery = v),
+              showDebugLog: _showDebugLog,
+              onToggleDebug: () => setState(() => _showDebugLog = !_showDebugLog),
             ),
-            
-            // Header with View Toggle
-            Padding(
-              padding: const EdgeInsets.fromLTRB(32, 16, 32, 16),
-              child: Row(
-                children: [
-                  Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFF4444).withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Icon(Icons.live_tv_rounded,
-                        color: Color(0xFFFF4444), size: 22),
-                  ),
-                  const SizedBox(width: 16),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _isGuideView ? 'TV Guide' : 'Live Channels',
-                        style: const TextStyle(
-                            fontFamily: 'Manrope',
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white),
-                      ),
-                      Text(
-                        _isGuideView
-                            ? 'Timeline of what\'s on'
-                            : 'Browse by category',
-                        style: const TextStyle(
-                            color: Colors.white38, fontSize: 12),
-                      ),
-                    ],
-                  ),
-                  const Spacer(),
-                  // View Toggle
-                  Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.05),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Row(
-                      children: [
-                        _ViewToggleBtn(
-                          icon: Icons.grid_view_rounded,
-                          isSelected: !_isGuideView,
-                          onTap: () => setState(() => _isGuideView = false),
-                        ),
-                        _ViewToggleBtn(
-                          icon: Icons.view_timeline_rounded,
-                          isSelected: _isGuideView,
-                          onTap: () => setState(() => _isGuideView = true),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  IconButton(
-                    icon: const Icon(Icons.refresh_rounded,
-                        color: Colors.white54),
-                    onPressed: () {
-                      provider.loadMedia(forceRefresh: true);
-                      provider.loadEpg(forceRefresh: true);
-                    },
-                  ),
-                ],
-              ),
-            ),
-
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 8),
-              child: Column(
-                children: [
-                  Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.05),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: TextField(
-                      style: const TextStyle(color: Colors.white),
-                      decoration: InputDecoration(
-                        hintText: 'Search channels...',
-                        hintStyle: const TextStyle(color: Colors.white38),
-                        prefixIcon:
-                            const Icon(Icons.search, color: Colors.white24),
-                        suffixIcon: _searchQuery.isEmpty
-                            ? null
-                            : IconButton(
-                                icon: const Icon(Icons.close_rounded,
-                                    color: Colors.white24, size: 18),
-                                onPressed: () =>
-                                    setState(() => _searchQuery = ''),
-                              ),
-                        border: InputBorder.none,
-                        contentPadding:
-                            const EdgeInsets.symmetric(vertical: 12),
-                      ),
-                      onChanged: (v) => setState(() => _searchQuery = v),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    height: 34,
-                    child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      itemCount: _filterOptions.length,
-                      separatorBuilder: (_, __) => const SizedBox(width: 8),
-                      itemBuilder: (context, index) {
-                        final filter = _filterOptions[index];
-                        final selected = _selectedFilters.contains(filter);
-                        return ChoiceChip(
-                          label: Text(filter,
-                              style: TextStyle(
-                                  color:
-                                      selected ? Colors.black : Colors.white)),
-                          selected: selected,
-                          selectedColor: const Color(0xFFAAC7FF),
-                          backgroundColor: Colors.white.withValues(alpha: 0.06),
-                          onSelected: (_) {
-                            setState(() {
-                              if (selected) {
-                                _selectedFilters.remove(filter);
-                              } else {
-                                _selectedFilters.add(filter);
-                              }
-                            });
-                          },
-                        );
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
+            if (_showDebugLog) _IptvDebugWindow(provider: provider),
             Expanded(
-              child: TabBarView(
-                controller: _tabController,
-                children: [
-                  // Live TV
-                  _KeepAliveWrapper(
-                    child: provider.isLoading
-                        ? const Center(
-                            child: CircularProgressIndicator(
-                                color: Color(0xFFFF4444)))
-                        : _isGuideView
-                            ? IptvGuideTimeline(
-                                provider: provider,
-                                channels:
-                                    _filteredChannels(provider.liveChannels),
-                              )
-                            : _buildCategoryView(provider),
-                  ),
-
-                  // Movies
-                  _KeepAliveWrapper(
-                    child: provider.isLoading
-                        ? const Center(
-                            child: CircularProgressIndicator(
-                                color: Color(0xFFFF4444)))
-                        : _buildCategoryViewWithData(provider.movies),
-                  ),
-
-                  // Series
-                  _KeepAliveWrapper(
-                    child: provider.isLoading
-                        ? const Center(
-                            child: CircularProgressIndicator(
-                                color: Color(0xFFFF4444)))
-                        : _buildCategoryViewWithData(provider.tvShows),
-                  ),
-                ],
+              child: IptvGuideTimeline(
+                provider: provider,
+                channels: filteredChannels,
+                category: _selectedCategory!,
               ),
             ),
           ],
@@ -240,117 +103,256 @@ class _IptvLiveScreenState extends State<IptvLiveScreen> with TickerProviderStat
       },
     );
   }
+}
 
-  List<IptvMedia> _filteredChannels(List<IptvMedia> channels) {
-    final query = _searchQuery.trim().toLowerCase();
+// ─── Category Grid (Live channels) ───────────────────────────────────────────
 
-    return channels.where((channel) {
-      if (_selectedFilters.isNotEmpty) {
-        final channelGroup = channel.group.toLowerCase();
-        final channelName =
-            channel.tvgName?.toLowerCase() ?? channel.name.toLowerCase();
-        final matchesFilter = _selectedFilters.any((filter) {
-          final lower = filter.toLowerCase();
-          return channelGroup.contains(lower) || channelName.contains(lower);
-        });
-        if (!matchesFilter) return false;
-      }
+class _CategoryGrid extends StatefulWidget {
+  final List<String> categories;
+  final Map<String, List<IptvMedia>> categoryMap;
+  final IptvProvider provider;
+  final Function(String) onCategorySelected;
 
-      if (query.isEmpty) return true;
-      final lowerName =
-          channel.tvgName?.toLowerCase() ?? channel.name.toLowerCase();
-      return lowerName.contains(query) ||
-          channel.group.toLowerCase().contains(query);
-    }).toList();
-  }
+  const _CategoryGrid({
+    required this.categories,
+    required this.categoryMap,
+    required this.provider,
+    required this.onCategorySelected,
+  });
 
-  Widget _buildCategoryView(IptvProvider provider) {
-    return _buildCategoryViewWithData(provider.liveChannels);
-  }
-  
-  Widget _buildCategoryViewWithData(List<IptvMedia> mediaList) {
-    final filtered = _filteredChannels(mediaList);
+  @override
+  State<_CategoryGrid> createState() => _CategoryGridState();
+}
 
-    final Map<String, List<IptvMedia>> categoryMap = {};
-    for (final item in filtered) {
-      categoryMap.putIfAbsent(item.group, () => []);
-      categoryMap[item.group]!.add(item);
-    }
-    final sortedCategories = categoryMap.keys.toList()..sort();
+class _CategoryGridState extends State<_CategoryGrid> {
+  String _search = '';
 
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 8),
-      itemCount: sortedCategories.length,
-      itemBuilder: (context, index) {
-        final category = sortedCategories[index];
-        final categoryItems = categoryMap[category]!;
-        return _CategoryRow(
-            category: category, channels: categoryItems, provider: Provider.of<IptvProvider>(context, listen: false));
-      },
+  @override
+  Widget build(BuildContext context) {
+    final filtered = _search.isEmpty
+        ? widget.categories
+        : widget.categories
+            .where((c) => c.toLowerCase().contains(_search.toLowerCase()))
+            .toList();
+
+    return Column(
+      children: [
+        // Header (Matches Premium Style)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Text(
+                    'Live TV',
+                    style: TextStyle(
+                      fontSize: 32,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.white,
+                      letterSpacing: -0.5,
+                    ),
+                  ),
+                  const Spacer(),
+                  _HeaderButton(
+                    label: 'Full Guide',
+                    icon: Icons.grid_view_rounded,
+                    onTap: () => widget.onCategorySelected('All Channels'),
+                    isPrimary: true,
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: const Icon(Icons.refresh_rounded, color: Colors.white38),
+                    onPressed: () => widget.provider.loadMedia(forceRefresh: true),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Container(
+                height: 48,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.05),
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                ),
+                child: TextField(
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                  decoration: InputDecoration(
+                    hintText: 'Search categories...',
+                    hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.3)),
+                    prefixIcon: Icon(Icons.search_rounded, color: Colors.white.withValues(alpha: 0.3), size: 20),
+                    border: InputBorder.none,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  onChanged: (v) => setState(() => _search = v),
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 8, 20, 12),
+          child: Row(
+            children: [
+              const Text(
+                'Categories',
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE9B3FF).withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  '${widget.categories.length}',
+                  style: const TextStyle(color: Color(0xFFE9B3FF), fontSize: 11, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        // Grid (Matches Image 0121 card style)
+        Expanded(
+          child: GridView.builder(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 180,
+              mainAxisExtent: 64,
+              crossAxisSpacing: 10,
+              mainAxisSpacing: 10,
+            ),
+            itemCount: filtered.length,
+            itemBuilder: (context, index) {
+              final cat = filtered[index];
+              return _CategoryCard(
+                category: cat,
+                onTap: () => widget.onCategorySelected(cat),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 }
 
-class _ViewToggleBtn extends StatelessWidget {
-  final IconData icon;
-  final bool isSelected;
+class _CategoryCard extends StatelessWidget {
+  final String category;
   final VoidCallback onTap;
 
-  const _ViewToggleBtn(
-      {required this.icon, required this.isSelected, required this.onTap});
+  const _CategoryCard({required this.category, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.all(10),
+        alignment: Alignment.center,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
         decoration: BoxDecoration(
-          color: isSelected
-              ? const Color(0xFFE9B3FF).withValues(alpha: 0.2)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
+          color: Colors.white.withValues(alpha: 0.04),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
         ),
-        child: Icon(icon,
-            size: 20,
-            color: isSelected ? const Color(0xFFE9B3FF) : Colors.white24),
+        child: Text(
+          category,
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.2,
+          ),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
       ),
     );
   }
 }
 
-class _CategoryRow extends StatelessWidget {
-  final String category;
-  final List<IptvMedia> channels;
-  final IptvProvider provider;
+class _IptvGuideHeader extends StatelessWidget {
+  final String selectedCategory;
+  final VoidCallback onCategoryTap;
+  final String searchQuery;
+  final ValueChanged<String> onSearchChanged;
+  final bool showDebugLog;
+  final VoidCallback onToggleDebug;
 
-  const _CategoryRow(
-      {required this.category, required this.channels, required this.provider});
+  const _IptvGuideHeader({
+    required this.selectedCategory,
+    required this.onCategoryTap,
+    required this.searchQuery,
+    required this.onSearchChanged,
+    required this.showDebugLog,
+    required this.onToggleDebug,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 32),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0D0B0F),
+        border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.05))),
+      ),
+      child: Row(
         children: [
-          Text(category,
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold)),
-          const SizedBox(height: 16),
-          SizedBox(
-            height: 180,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: channels.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 16),
-              itemBuilder: (context, index) {
-                final channel = channels[index];
-                return _ChannelCard(channel: channel, provider: provider);
-              },
+          // Today Selector (Left)
+          _HeaderButton(
+            label: 'Today',
+            icon: Icons.keyboard_arrow_down_rounded,
+            onTap: () {}, // Date picker placeholder
+          ),
+          const Spacer(),
+          
+          // Category Dropdown (Center)
+          _HeaderButton(
+            label: selectedCategory,
+            icon: Icons.keyboard_arrow_down_rounded,
+            onTap: onCategoryTap,
+            isPrimary: true,
+          ),
+          
+          const Spacer(),
+          
+          // Search (Right)
+          Container(
+            width: 220,
+            height: 38,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(19),
             ),
+            child: TextField(
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+              decoration: InputDecoration(
+                hintText: 'Search by program name...',
+                hintStyle: const TextStyle(color: Colors.white24),
+                prefixIcon: const Icon(Icons.search_rounded, color: Colors.white24, size: 18),
+                border: InputBorder.none,
+                contentPadding: const EdgeInsets.symmetric(vertical: 0),
+              ),
+              onChanged: onSearchChanged,
+            ),
+          ),
+          const SizedBox(width: 8),
+          IconButton(
+            icon: Icon(
+              showDebugLog ? Icons.bug_report_rounded : Icons.bug_report_outlined,
+              color: showDebugLog ? const Color(0xFFE9B3FF) : Colors.white24,
+              size: 20,
+            ),
+            onPressed: onToggleDebug,
           ),
         ],
       ),
@@ -358,97 +360,533 @@ class _CategoryRow extends StatelessWidget {
   }
 }
 
-class _ChannelCard extends StatelessWidget {
-  final IptvMedia channel;
-  final IptvProvider provider;
+class _HeaderButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+  final bool isPrimary;
 
-  const _ChannelCard({required this.channel, required this.provider});
+  const _HeaderButton({
+    required this.label,
+    required this.icon,
+    required this.onTap,
+    this.isPrimary = false,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final currentProgram = provider.getCurrentProgram(channel.tvgId);
     return GestureDetector(
-      onTap: () {
-        Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => IptvPlayerScreen(media: channel)));
-      },
+      onTap: onTap,
       child: Container(
-        width: 220,
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.03),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+          color: isPrimary ? const Color(0xFFE9B3FF).withValues(alpha: 0.05) : Colors.white.withValues(alpha: 0.03),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isPrimary ? const Color(0xFFE9B3FF).withValues(alpha: 0.2) : Colors.white.withValues(alpha: 0.05),
+          ),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Row(
-              children: [
-                Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                      color: Colors.black26,
-                      borderRadius: BorderRadius.circular(8)),
-                  child: channel.logo.isNotEmpty
-                      ? ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: CachedNetworkImage(
-                              imageUrl: channel.logo, fit: BoxFit.contain))
-                      : const Icon(Icons.live_tv, color: Colors.white12),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                    child: Text(channel.name,
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 13,
-                            fontWeight: FontWeight.bold),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis)),
-              ],
+            Text(
+              label,
+              style: TextStyle(
+                color: isPrimary ? const Color(0xFFE9B3FF) : Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.5,
+              ),
             ),
-            const Spacer(),
-            if (currentProgram != null) ...[
-              Text(currentProgram.title,
-                  style: const TextStyle(
-                      color: Color(0xFFE9B3FF),
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis),
-              const SizedBox(height: 4),
-              _buildProgress(currentProgram),
-            ] else
-              const Text('No Guide',
-                  style: TextStyle(color: Colors.white12, fontSize: 11)),
+            const SizedBox(width: 4),
+            Icon(icon, color: isPrimary ? const Color(0xFFE9B3FF) : Colors.white38, size: 18),
           ],
         ),
       ),
     );
   }
+}
 
-  Widget _buildProgress(EpgEntry entry) {
-    final now = DateTime.now();
-    final total = entry.end.difference(entry.start).inMinutes;
-    final elapsed = now.difference(entry.start).inMinutes;
-    final progress = (elapsed / total).clamp(0.0, 1.0);
-    return LinearProgressIndicator(
-        value: progress,
-        backgroundColor: Colors.white10,
-        valueColor: const AlwaysStoppedAnimation(Color(0xFFE9B3FF)),
-        minHeight: 2,
-        borderRadius: BorderRadius.circular(2));
+// ─── Category EPG Page ────────────────────────────────────────────────────────
+
+class CategoryEpgPage extends StatefulWidget {
+  final String category;
+  final List<String> allCategories;
+  final Map<String, List<IptvMedia>> channelsByCategory;
+  final IptvProvider provider;
+
+  const CategoryEpgPage({
+    super.key,
+    required this.category,
+    required this.allCategories,
+    required this.channelsByCategory,
+    required this.provider,
+  });
+
+  @override
+  State<CategoryEpgPage> createState() => _CategoryEpgPageState();
+}
+
+class _CategoryEpgPageState extends State<CategoryEpgPage> {
+  late String _selectedCategory;
+  bool _showSearch = false;
+  String _search = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedCategory = widget.category;
+  }
+
+  List<IptvMedia> get _channels {
+    final all = widget.channelsByCategory[_selectedCategory] ?? [];
+    if (_search.isEmpty) return all;
+    final q = _search.toLowerCase();
+    return all
+        .where((c) =>
+            c.name.toLowerCase().contains(q) ||
+            (c.tvgName?.toLowerCase().contains(q) ?? false))
+        .toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0D0B0F),
+      body: Column(
+        children: [
+          // ── Custom header ───────────────────────────────────────────
+          SafeArea(
+            bottom: false,
+            child: Container(
+              height: 56,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF131016),
+                border: Border(
+                  bottom: BorderSide(
+                      color: const Color(0xFFE9B3FF).withValues(alpha: 0.12)),
+                ),
+              ),
+              child: Row(
+                children: [
+                  // Back
+                  IconButton(
+                    icon: const Icon(Icons.arrow_back_ios_rounded,
+                        color: Colors.white70, size: 20),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+
+                  // Category selector
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: _showCategoryPicker,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Flexible(
+                            child: Text(
+                              _selectedCategory,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w800,
+                                fontFamily: 'Manrope',
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          const Icon(Icons.keyboard_arrow_down_rounded,
+                              color: Color(0xFFE9B3FF), size: 20),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  // Search toggle
+                  IconButton(
+                    icon: Icon(
+                      _showSearch
+                          ? Icons.search_off_rounded
+                          : Icons.search_rounded,
+                      color: Colors.white54,
+                    ),
+                    onPressed: () => setState(() {
+                      _showSearch = !_showSearch;
+                      if (!_showSearch) _search = '';
+                    }),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // Search field
+          if (_showSearch)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.06),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: TextField(
+                  autofocus: true,
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                  decoration: const InputDecoration(
+                    hintText: 'Search channels…',
+                    hintStyle: TextStyle(color: Colors.white30),
+                    prefixIcon: Icon(Icons.search_rounded, color: Colors.white24),
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.symmetric(vertical: 10),
+                  ),
+                  onChanged: (v) => setState(() => _search = v),
+                ),
+              ),
+            ),
+
+          // EPG timeline
+          Expanded(
+            child: IptvGuideTimeline(
+              provider: widget.provider,
+              channels: _channels,
+              category: _selectedCategory,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showCategoryPicker() {
+    showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: const Color(0xFF1A1520),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => _CategoryPickerSheet(
+        categories: widget.allCategories,
+        selected: _selectedCategory,
+      ),
+    ).then((cat) {
+      if (cat != null && mounted) setState(() => _selectedCategory = cat);
+    });
   }
 }
 
-/// The Timeline Guide View
+class _CategoryPickerSheet extends StatefulWidget {
+  final List<String> categories;
+  final String selected;
+  const _CategoryPickerSheet(
+      {required this.categories, required this.selected});
+
+  @override
+  State<_CategoryPickerSheet> createState() => _CategoryPickerSheetState();
+}
+
+class _CategoryPickerSheetState extends State<_CategoryPickerSheet> {
+  String _q = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final cats = _q.isEmpty
+        ? widget.categories
+        : widget.categories
+            .where((c) => c.toLowerCase().contains(_q.toLowerCase()))
+            .toList();
+    return Column(
+      children: [
+        const SizedBox(height: 12),
+        Container(
+          width: 36,
+          height: 4,
+          decoration: BoxDecoration(
+            color: Colors.white24,
+            borderRadius: BorderRadius.circular(99),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: TextField(
+            autofocus: true,
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              hintText: 'Filter categories…',
+              hintStyle: const TextStyle(color: Colors.white30),
+              filled: true,
+              fillColor: Colors.white.withValues(alpha: 0.06),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: BorderSide.none,
+              ),
+              prefixIcon:
+                  const Icon(Icons.search_rounded, color: Colors.white24),
+              contentPadding: const EdgeInsets.symmetric(vertical: 10),
+            ),
+            onChanged: (v) => setState(() => _q = v),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Expanded(
+          child: ListView.builder(
+            itemCount: cats.length,
+            itemBuilder: (context, i) {
+              final cat = cats[i];
+              final selected = cat == widget.selected;
+              return ListTile(
+                dense: true,
+                title: Text(
+                  cat,
+                  style: TextStyle(
+                    color: selected ? const Color(0xFFE9B3FF) : Colors.white,
+                    fontWeight:
+                        selected ? FontWeight.w800 : FontWeight.normal,
+                  ),
+                ),
+                trailing: selected
+                    ? const Icon(Icons.check_rounded,
+                        color: Color(0xFFE9B3FF), size: 18)
+                    : null,
+                onTap: () => Navigator.of(context).pop(cat),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ─── Media category grid (Movies / Series) ───────────────────────────────────
+
+class _MediaCategoryGrid extends StatefulWidget {
+  final List<IptvMedia> items;
+  final IptvProvider provider;
+
+  const _MediaCategoryGrid({required this.items, required this.provider});
+
+  @override
+  State<_MediaCategoryGrid> createState() => _MediaCategoryGridState();
+}
+
+class _MediaCategoryGridState extends State<_MediaCategoryGrid> {
+  String _search = '';
+  String? _selectedCategory;
+
+  Map<String, List<IptvMedia>> get _categoryMap {
+    final map = <String, List<IptvMedia>>{};
+    for (final item in widget.items) {
+      map.putIfAbsent(item.group, () => []).add(item);
+    }
+    return map;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_selectedCategory != null) {
+      final items = _categoryMap[_selectedCategory!] ?? [];
+      return _MediaItemList(
+        category: _selectedCategory!,
+        items: items,
+        provider: widget.provider,
+        onBack: () => setState(() => _selectedCategory = null),
+      );
+    }
+
+    final allCats = _categoryMap.keys.toList()..sort();
+    final filtered = _search.isEmpty
+        ? allCats
+        : allCats
+            .where((c) => c.toLowerCase().contains(_search.toLowerCase()))
+            .toList();
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(14),
+              border:
+                  Border.all(color: Colors.white.withValues(alpha: 0.08)),
+            ),
+            child: TextField(
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                hintText: 'Search categories…',
+                hintStyle: const TextStyle(color: Colors.white38),
+                prefixIcon:
+                    const Icon(Icons.search_rounded, color: Colors.white24),
+                suffixIcon: _search.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.close_rounded,
+                            color: Colors.white24, size: 18),
+                        onPressed: () => setState(() => _search = ''),
+                      )
+                    : null,
+                border: InputBorder.none,
+                contentPadding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+              onChanged: (v) => setState(() => _search = v),
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 14, 20, 8),
+          child: Row(
+            children: [
+              const Text('Categories',
+                  style: TextStyle(
+                      fontFamily: 'Manrope',
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800)),
+              const SizedBox(width: 10),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE9B3FF).withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(99),
+                ),
+                child: Text('${filtered.length}',
+                    style: const TextStyle(
+                        color: Color(0xFFE9B3FF),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800)),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: GridView.builder(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 160,
+              mainAxisExtent: 64,
+              crossAxisSpacing: 8,
+              mainAxisSpacing: 8,
+            ),
+            itemCount: filtered.length,
+            itemBuilder: (context, index) {
+              final category = filtered[index];
+              return _CategoryCard(
+                category: category,
+                onTap: () => setState(() => _selectedCategory = category),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MediaItemList extends StatelessWidget {
+  final String category;
+  final List<IptvMedia> items;
+  final IptvProvider provider;
+  final VoidCallback onBack;
+
+  const _MediaItemList({
+    required this.category,
+    required this.items,
+    required this.provider,
+    required this.onBack,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        // Header
+        Container(
+          height: 56,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(
+                  color: const Color(0xFFE9B3FF).withValues(alpha: 0.12)),
+            ),
+          ),
+          child: Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.arrow_back_ios_rounded,
+                    color: Colors.white70, size: 20),
+                onPressed: onBack,
+              ),
+              Text(
+                category,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                  fontFamily: 'Manrope',
+                ),
+              ),
+            ],
+          ),
+        ),
+        // List
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            itemCount: items.length,
+            itemBuilder: (context, index) {
+              final item = items[index];
+              return ListTile(
+                leading: item.logo.isNotEmpty
+                    ? ClipRRect(
+                        borderRadius: BorderRadius.circular(6),
+                        child: CachedNetworkImage(
+                          imageUrl: item.logo,
+                          width: 48,
+                          height: 48,
+                          fit: BoxFit.cover,
+                          errorWidget: (_, __, ___) => const Icon(
+                              Icons.movie_rounded,
+                              color: Colors.white24),
+                        ),
+                      )
+                    : const Icon(Icons.movie_rounded, color: Colors.white24),
+                title: Text(item.name,
+                    style: const TextStyle(color: Colors.white, fontSize: 13)),
+                subtitle: item.tvgName != null && item.tvgName != item.name
+                    ? Text(item.tvgName!,
+                        style: const TextStyle(
+                            color: Colors.white38, fontSize: 11))
+                    : null,
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                      builder: (_) => IptvPlayerScreen(media: item)),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ─── EPG Timeline Guide ───────────────────────────────────────────────────────
+
 class IptvGuideTimeline extends StatefulWidget {
   final IptvProvider provider;
   final List<IptvMedia> channels;
-  const IptvGuideTimeline(
-      {super.key, required this.provider, required this.channels});
+  final String category;
+
+  const IptvGuideTimeline({
+    super.key,
+    required this.provider,
+    required this.channels,
+    this.category = '',
+  });
 
   @override
   State<IptvGuideTimeline> createState() => _IptvGuideTimelineState();
@@ -456,197 +894,158 @@ class IptvGuideTimeline extends StatefulWidget {
 
 class _IptvGuideTimelineState extends State<IptvGuideTimeline> {
   late DateTime _startTime;
-  final double _pixelsPerMinute = 2.8;
-  final double _channelRailWidth = 206;
-  final double _rowHeight = 76;
-  final ScrollController _programVerticalController = ScrollController();
-  final ScrollController _channelVerticalController = ScrollController();
-  final ScrollController _programHorizontalController = ScrollController();
-  final ScrollController _timeHorizontalController = ScrollController();
-  bool _syncingVertical = false;
-  bool _syncingHorizontal = false;
+  final double _pixelsPerMinute = 3.5; // Slightly wider for better readability
+  final double _channelRailWidth = 180;
+  final double _rowHeight = 84;
+
+  final ScrollController _programV = ScrollController();
+  final ScrollController _channelV = ScrollController();
+  final ScrollController _programH = ScrollController();
+  final ScrollController _timeH = ScrollController();
+  bool _syncV = false;
+  bool _syncH = false;
 
   @override
   void initState() {
     super.initState();
-    // Start timeline 3 hours ago so the user can scrub back and forward.
-    _startTime = DateTime.now().subtract(const Duration(hours: 3));
-    // Round to nearest 30 mins
-    _startTime = DateTime(
-      _startTime.year,
-      _startTime.month,
-      _startTime.day,
-      _startTime.hour,
-      (_startTime.minute / 30).floor() * 30,
-    );
-    _programVerticalController.addListener(_syncChannelRail);
-    _channelVerticalController.addListener(_syncProgramRows);
-    _programHorizontalController.addListener(_syncTimeHeader);
-    _timeHorizontalController.addListener(_syncProgramTimeline);
+    _startTime = _roundedTime(DateTime.now().subtract(const Duration(hours: 3)));
+    _programV.addListener(_onProgramV);
+    _channelV.addListener(_onChannelV);
+    _programH.addListener(_onProgramH);
+    _timeH.addListener(_onTimeH);
     WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToNow());
+  }
+
+  DateTime _roundedTime(DateTime dt) {
+    return DateTime(dt.year, dt.month, dt.day, dt.hour,
+        (dt.minute / 30).floor() * 30);
   }
 
   @override
   void dispose() {
-    _programVerticalController
-      ..removeListener(_syncChannelRail)
+    _programV
+      ..removeListener(_onProgramV)
       ..dispose();
-    _channelVerticalController
-      ..removeListener(_syncProgramRows)
+    _channelV
+      ..removeListener(_onChannelV)
       ..dispose();
-    _programHorizontalController
-      ..removeListener(_syncTimeHeader)
+    _programH
+      ..removeListener(_onProgramH)
       ..dispose();
-    _timeHorizontalController
-      ..removeListener(_syncProgramTimeline)
+    _timeH
+      ..removeListener(_onTimeH)
       ..dispose();
     super.dispose();
   }
 
-  void _syncChannelRail() {
-    if (_syncingVertical || !_channelVerticalController.hasClients) return;
-    _syncingVertical = true;
-    _channelVerticalController.jumpTo(
-      _programVerticalController.offset.clamp(
-        0.0,
-        _channelVerticalController.position.maxScrollExtent,
-      ),
-    );
-    _syncingVertical = false;
+  void _onProgramV() {
+    if (_syncV || !_channelV.hasClients) return;
+    _syncV = true;
+    _channelV.jumpTo(
+        _programV.offset.clamp(0.0, _channelV.position.maxScrollExtent));
+    _syncV = false;
   }
 
-  void _syncProgramRows() {
-    if (_syncingVertical || !_programVerticalController.hasClients) return;
-    _syncingVertical = true;
-    _programVerticalController.jumpTo(
-      _channelVerticalController.offset.clamp(
-        0.0,
-        _programVerticalController.position.maxScrollExtent,
-      ),
-    );
-    _syncingVertical = false;
+  void _onChannelV() {
+    if (_syncV || !_programV.hasClients) return;
+    _syncV = true;
+    _programV.jumpTo(
+        _channelV.offset.clamp(0.0, _programV.position.maxScrollExtent));
+    _syncV = false;
   }
 
-  void _syncTimeHeader() {
-    if (_syncingHorizontal || !_timeHorizontalController.hasClients) return;
-    _syncingHorizontal = true;
-    _timeHorizontalController.jumpTo(
-      _programHorizontalController.offset.clamp(
-        0.0,
-        _timeHorizontalController.position.maxScrollExtent,
-      ),
-    );
-    _syncingHorizontal = false;
+  void _onProgramH() {
+    if (_syncH || !_timeH.hasClients) return;
+    _syncH = true;
+    _timeH.jumpTo(_programH.offset.clamp(0.0, _timeH.position.maxScrollExtent));
+    _syncH = false;
   }
 
-  void _syncProgramTimeline() {
-    if (_syncingHorizontal || !_programHorizontalController.hasClients) return;
-    _syncingHorizontal = true;
-    _programHorizontalController.jumpTo(
-      _timeHorizontalController.offset.clamp(
-        0.0,
-        _programHorizontalController.position.maxScrollExtent,
-      ),
-    );
-    _syncingHorizontal = false;
+  void _onTimeH() {
+    if (_syncH || !_programH.hasClients) return;
+    _syncH = true;
+    _programH
+        .jumpTo(_timeH.offset.clamp(0.0, _programH.position.maxScrollExtent));
+    _syncH = false;
   }
 
-  void _scrollTimeline(int minutes) {
-    if (!_programHorizontalController.hasClients) return;
-    final target =
-        (_programHorizontalController.offset + minutes * _pixelsPerMinute)
-            .clamp(0.0, _programHorizontalController.position.maxScrollExtent);
-    _programHorizontalController.animateTo(
-      target,
-      duration: const Duration(milliseconds: 320),
-      curve: Curves.easeOutCubic,
-    );
-  }
 
   void _jumpToNow() {
-    if (!_programHorizontalController.hasClients) return;
-    final nowOffset =
-        DateTime.now().difference(_startTime).inMinutes * _pixelsPerMinute;
-    final target = (nowOffset - 240).clamp(
-      0.0,
-      _programHorizontalController.position.maxScrollExtent,
-    );
-    _programHorizontalController.jumpTo(target);
+    if (!_programH.hasClients) return;
+    final offset = DateTime.now().difference(_startTime).inMinutes *
+        _pixelsPerMinute;
+    _programH.jumpTo(
+        (offset - 200).clamp(0.0, _programH.position.maxScrollExtent));
   }
 
   @override
   Widget build(BuildContext context) {
     final channels = widget.channels;
     if (channels.isEmpty) {
-      return const Center(
-        child: Text(
-          'No live channels found',
-          style: TextStyle(color: Colors.white54, fontSize: 16),
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.tv_off_rounded, color: Colors.white24, size: 48),
+            const SizedBox(height: 12),
+            Text(
+              widget.category.isEmpty
+                  ? 'No channels found'
+                  : 'No channels in ${widget.category}',
+              style:
+                  const TextStyle(color: Colors.white38, fontSize: 15),
+            ),
+          ],
         ),
       );
     }
 
     return Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(32, 0, 32, 12),
-          child: _buildGuideToolbar(),
-        ),
+        // Guide Grid
         Expanded(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(32, 0, 32, 28),
-            child: DecoratedBox(
+            padding: const EdgeInsets.fromLTRB(0, 0, 0, 0),
+            child: Container(
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.035),
-                borderRadius: BorderRadius.circular(26),
-                border: Border.all(
-                  color: const Color(0xFFE9B3FF).withValues(alpha: 0.16),
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFFE9B3FF).withValues(alpha: 0.08),
-                    blurRadius: 24,
-                    offset: const Offset(0, 16),
+                color: const Color(0xFF0D0B0F),
+              ),
+              child: Column(
+                children: [
+                  // Time header row (Matches Image 0120 top)
+                  Container(
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF131016),
+                      border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.05))),
+                    ),
+                    child: Row(
+                      children: [
+                        _buildCorner(),
+                        Expanded(child: _buildTimeHeader()),
+                      ],
+                    ),
+                  ),
+                  // Channel rail + programs
+                  Expanded(
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: _channelRailWidth,
+                          child: ListView.builder(
+                            controller: _channelV,
+                            itemExtent: _rowHeight,
+                            itemCount: channels.length,
+                            itemBuilder: (context, i) =>
+                                _buildChannelHeader(channels[i], i),
+                          ),
+                        ),
+                        Expanded(child: _buildProgramGrid(channels)),
+                      ],
+                    ),
                   ),
                 ],
               ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(26),
-                child: Column(
-                  children: [
-                    SizedBox(
-                      height: 46,
-                      child: Row(
-                        children: [
-                          _buildChannelCorner(),
-                          Expanded(child: _buildTimeHeader()),
-                        ],
-                      ),
-                    ),
-                    Expanded(
-                      child: Row(
-                        children: [
-                          SizedBox(
-                            width: _channelRailWidth,
-                            child: ListView.builder(
-                              controller: _channelVerticalController,
-                              itemExtent: _rowHeight,
-                              itemCount: channels.length,
-                              itemBuilder: (context, index) {
-                                return _buildChannelRowHeader(
-                                  channels[index],
-                                  index,
-                                );
-                              },
-                            ),
-                          ),
-                          Expanded(child: _buildProgramGrid(channels)),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
             ),
           ),
         ),
@@ -654,115 +1053,138 @@ class _IptvGuideTimelineState extends State<IptvGuideTimeline> {
     );
   }
 
-  Widget _buildGuideToolbar() {
-    return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color: const Color(0xFFE9B3FF).withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(
-              color: const Color(0xFFE9B3FF).withValues(alpha: 0.24),
-            ),
-          ),
-          child: Row(
-            children: [
-              const Icon(
-                Icons.schedule_rounded,
-                color: Color(0xFFE9B3FF),
-                size: 17,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                'Now: ${DateFormat('h:mm a').format(DateTime.now())}',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
-        ),
-        const Spacer(),
-        _TimelineButton(
-          icon: Icons.keyboard_arrow_left_rounded,
-          label: 'Back',
-          onTap: () => _scrollTimeline(-120),
-        ),
-        const SizedBox(width: 8),
-        _TimelineButton(
-          icon: Icons.my_location_rounded,
-          label: 'Now',
-          onTap: _jumpToNow,
-        ),
-        const SizedBox(width: 8),
-        _TimelineButton(
-          icon: Icons.keyboard_arrow_right_rounded,
-          label: 'Forward',
-          onTap: () => _scrollTimeline(120),
-        ),
-      ],
-    );
-  }
 
-  Widget _buildChannelCorner() {
+  Widget _buildCorner() {
     return Container(
       width: _channelRailWidth,
-      padding: const EdgeInsets.symmetric(horizontal: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
-        color: const Color(0xFF221820).withValues(alpha: 0.92),
+        color: const Color(0xFF131016),
         border: Border(
-          right: BorderSide(
-            color: const Color(0xFFE9B3FF).withValues(alpha: 0.18),
-          ),
-          bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+          right: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
         ),
       ),
-      child: const Row(
-        children: [
-          Text(
-            'CH',
-            style: TextStyle(
-              color: Color(0xFFE9B3FF),
-              fontSize: 12,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 1.8,
-            ),
+      child: const Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          'CHANNELS',
+          style: TextStyle(
+            color: Colors.white38,
+            fontSize: 10,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 1.5,
           ),
-          SizedBox(width: 12),
-          Text(
-            'Channels',
-            style: TextStyle(
-              color: Colors.white70,
-              fontSize: 12,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
 
+  Widget _buildTimeHeader() {
+    return ListView.builder(
+      controller: _timeH,
+      scrollDirection: Axis.horizontal,
+      itemCount: 48, // 24 hours
+      itemBuilder: (context, i) {
+        final t = _startTime.add(Duration(minutes: i * 30));
+        return Container(
+          width: 30 * _pixelsPerMinute,
+          alignment: Alignment.centerLeft,
+          padding: const EdgeInsets.only(left: 12),
+          decoration: BoxDecoration(
+            border: Border(
+              left: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
+            ),
+          ),
+          child: Text(
+            DateFormat('h:mm a').format(t).toLowerCase(),
+            style: const TextStyle(
+                color: Colors.white60,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.2),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildChannelHeader(IptvMedia channel, int index) {
+    return GestureDetector(
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => IptvPlayerScreen(media: channel)),
+      ),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0D0B0F),
+          border: Border(
+            bottom: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
+            right: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
+          ),
+        ),
+        child: Row(
+          children: [
+            // Channel logo (IMG_0120 style)
+            Container(
+              width: 50,
+              height: 50,
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: channel.logo.isNotEmpty
+                  ? CachedNetworkImage(
+                      imageUrl: channel.logo,
+                      fit: BoxFit.contain,
+                      errorWidget: (_, __, ___) => const Icon(
+                          Icons.live_tv_rounded,
+                          size: 24,
+                          color: Colors.white24),
+                    )
+                  : const Icon(Icons.live_tv_rounded,
+                      size: 24, color: Colors.white24),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(channel.name,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
   Widget _buildProgramGrid(List<IptvMedia> channels) {
+    final totalWidth = 48 * 30 * _pixelsPerMinute; // 24 hours
     return NotificationListener<ScrollNotification>(
       onNotification: (_) => false,
       child: SingleChildScrollView(
-        controller: _programHorizontalController,
+        controller: _programH,
         scrollDirection: Axis.horizontal,
         child: SizedBox(
-          width: 12 * 60 * _pixelsPerMinute,
+          width: totalWidth,
           child: Stack(
             children: [
               ListView.builder(
-                controller: _programVerticalController,
+                controller: _programV,
                 itemExtent: _rowHeight,
                 itemCount: channels.length,
-                itemBuilder: (context, index) {
-                  return _buildTimelineRow(channels[index]);
-                },
+                itemBuilder: (context, i) =>
+                    _buildProgramRow(channels[i], i),
               ),
+              // "Now" line (Sakura Glow)
               Positioned(
                 left: DateTime.now().difference(_startTime).inMinutes *
                     _pixelsPerMinute,
@@ -770,15 +1192,13 @@ class _IptvGuideTimelineState extends State<IptvGuideTimeline> {
                 bottom: 0,
                 child: IgnorePointer(
                   child: Container(
-                    width: 3,
+                    width: 2,
                     decoration: BoxDecoration(
                       color: const Color(0xFFE9B3FF),
-                      borderRadius: BorderRadius.circular(99),
                       boxShadow: [
                         BoxShadow(
-                          color:
-                              const Color(0xFFE9B3FF).withValues(alpha: 0.45),
-                          blurRadius: 14,
+                          color: const Color(0xFFE9B3FF).withValues(alpha: 0.8),
+                          blurRadius: 10,
                           spreadRadius: 2,
                         ),
                       ],
@@ -793,306 +1213,137 @@ class _IptvGuideTimelineState extends State<IptvGuideTimeline> {
     );
   }
 
-  Widget _buildTimeHeader() {
-    return ListView.builder(
-      controller: _timeHorizontalController,
-      scrollDirection: Axis.horizontal,
-      itemCount: 24, // 12 hours in 30 min increments
-      itemBuilder: (context, index) {
-        final time = _startTime.add(Duration(minutes: index * 30));
-        return Container(
-          width: 30 * _pixelsPerMinute,
-          alignment: Alignment.centerLeft,
-          padding: const EdgeInsets.only(left: 12),
-          decoration: BoxDecoration(
-            color: const Color(0xFF181316).withValues(alpha: 0.82),
-            border: Border(
-              left: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
-              bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
-            ),
-          ),
-          child: Text(
-            DateFormat('h:mm a').format(time),
-            style: const TextStyle(
-              color: Colors.white54,
-              fontSize: 11,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildChannelRowHeader(IptvMedia channel, int index) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10),
-      decoration: BoxDecoration(
-        border: Border(
-          bottom: BorderSide(color: Colors.white.withValues(alpha: 0.04)),
-          right: BorderSide(
-            color: const Color(0xFFE9B3FF).withValues(alpha: 0.18),
-            width: 1,
-          ),
-        ),
-        color: index.isEven
-            ? Colors.white.withValues(alpha: 0.025)
-            : Colors.white.withValues(alpha: 0.015),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 32,
-            height: 32,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: const Color(0xFFE9B3FF).withValues(alpha: 0.13),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: const Color(0xFFE9B3FF).withValues(alpha: 0.22),
-              ),
-            ),
-            child: Text(
-              '${index + 1}',
-              style: const TextStyle(
-                color: Color(0xFFFFD7F5),
-                fontSize: 12,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          if (channel.logo.isNotEmpty)
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Container(
-                width: 32,
-                height: 32,
-                color: Colors.black.withValues(alpha: 0.24),
-                child: CachedNetworkImage(
-                  imageUrl: channel.logo,
-                  fit: BoxFit.contain,
-                  errorWidget: (_, __, ___) =>
-                      const Icon(Icons.live_tv, size: 20),
-                ),
-              ),
-            )
-          else
-            Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.22),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Icon(Icons.live_tv, size: 20, color: Colors.white24),
-            ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(channel.name,
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis),
-                Text(channel.group,
-                    style: const TextStyle(color: Colors.white24, fontSize: 9),
-                    maxLines: 1),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTimelineRow(IptvMedia channel) {
+  Widget _buildProgramRow(IptvMedia channel, int channelIndex) {
     final programs = widget.provider.getEpgForChannel(channel.tvgId);
+    final accentColor = _colorForIndex(channelIndex);
+
     return Container(
       decoration: BoxDecoration(
         border: Border(
-          bottom: BorderSide(color: Colors.white.withValues(alpha: 0.04)),
-        ),
+            bottom: BorderSide(color: Colors.white.withValues(alpha: 0.04))),
       ),
       child: Stack(
         children: [
-          ...List.generate(24, (index) {
-            return Positioned(
-              left: index * 30 * _pixelsPerMinute,
-              top: 0,
-              bottom: 0,
-              child: Container(
-                width: 1,
-                color: Colors.white.withValues(alpha: 0.035),
-              ),
-            );
-          }),
-          if (programs.isEmpty) _buildNoGuideBubble(channel),
-          ...programs.map((p) => _positionProgram(p, channel)),
+          // 30-min grid lines
+          ...List.generate(24, (i) => Positioned(
+                left: i * 30 * _pixelsPerMinute,
+                top: 0,
+                bottom: 0,
+                child: Container(
+                    width: 1,
+                    color: Colors.white.withValues(alpha: 0.03)),
+              )),
+          if (programs.isEmpty)
+            _noGuideBubble(channel, accentColor)
+          else
+            ...programs.map((p) => _programBubble(p, channel, accentColor)),
         ],
       ),
     );
   }
 
-  Widget _positionProgram(EpgEntry entry, IptvMedia channel) {
+  Widget _noGuideBubble(IptvMedia channel, Color accent) {
+    return Positioned(
+      left: 8,
+      top: 10,
+      bottom: 10,
+      width: 220,
+      child: GestureDetector(
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => IptvPlayerScreen(media: channel)),
+        ),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          alignment: Alignment.centerLeft,
+          decoration: BoxDecoration(
+            color: accent.withValues(alpha: 0.06),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: accent.withValues(alpha: 0.15)),
+          ),
+          child: const Text('No guide data',
+              style: TextStyle(
+                  color: Colors.white30,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600)),
+        ),
+      ),
+    );
+  }
+
+  Widget _programBubble(
+      EpgEntry entry, IptvMedia channel, Color accentColor) {
+    final now = DateTime.now();
+    final isLive = entry.start.isBefore(now) && entry.end.isAfter(now);
+    final isPast = entry.end.isBefore(now);
+
     final startDiff = entry.start.difference(_startTime).inMinutes;
     final duration = entry.end.difference(entry.start).inMinutes;
     if (startDiff + duration < 0 || startDiff > 12 * 60) {
       return const SizedBox.shrink();
     }
 
-    final left = startDiff.clamp(0, 12 * 60) * _pixelsPerMinute;
-    final visibleDuration = duration - (startDiff < 0 ? startDiff.abs() : 0);
+    final left = startDiff.clamp(0, 48 * 30) * _pixelsPerMinute;
+    final visibleDur = duration - (startDiff < 0 ? -startDiff : 0);
+    final width = (visibleDur * _pixelsPerMinute - 4).clamp(40.0, 1000.0);
 
     return Positioned(
       left: left.toDouble(),
-      width: (visibleDuration * _pixelsPerMinute - 8).clamp(86.0, 560.0),
-      top: 9,
-      bottom: 9,
-      child: _buildProgramBubble(entry, channel),
-    );
-  }
-
-  Widget _buildNoGuideBubble(IptvMedia channel) {
-    return Positioned(
-      left: 12,
-      top: 12,
-      bottom: 12,
-      width: 260,
+      width: width,
+      top: 6,
+      bottom: 6,
       child: GestureDetector(
-        onTap: () {
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => IptvPlayerScreen(media: channel)),
-          );
-        },
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 13),
-          alignment: Alignment.centerLeft,
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.035),
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
-          ),
-          child: const Text(
-            'No guide data',
-            style: TextStyle(
-              color: Colors.white30,
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildProgramBubble(EpgEntry entry, IptvMedia channel) {
-    final now = DateTime.now();
-    final isNow = entry.start.isBefore(now) && entry.end.isAfter(now);
-    final isPast = entry.end.isBefore(now);
-
-    return GestureDetector(
-      onTap: () {
-        Navigator.of(context).push(
+        onTap: () => Navigator.of(context).push(
           MaterialPageRoute(builder: (_) => IptvPlayerScreen(media: channel)),
-        );
-      },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: isNow
-              ? const Color(0xFFE9B3FF).withValues(alpha: 0.18)
-              : isPast
-                  ? Colors.white.withValues(alpha: 0.035)
-                  : const Color(0xFFAAC7FF).withValues(alpha: 0.07),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(
-            color: isNow
-                ? const Color(0xFFFFD7F5).withValues(alpha: 0.52)
-                : Colors.white.withValues(alpha: 0.07),
-          ),
-          boxShadow: isNow
-              ? [
-                  BoxShadow(
-                    color: const Color(0xFFE9B3FF).withValues(alpha: 0.18),
-                    blurRadius: 16,
-                    offset: const Offset(0, 8),
-                  ),
-                ]
-              : null,
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              entry.title,
-              style: TextStyle(
-                color: isPast ? Colors.white54 : Colors.white,
-                fontSize: 11,
-                fontWeight: isNow ? FontWeight.w900 : FontWeight.w700,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 3),
-            Text(
-              '${DateFormat('h:mm').format(entry.start)} - ${DateFormat('h:mm a').format(entry.end)}',
-              style: TextStyle(
-                color: isNow
-                    ? const Color(0xFFFFD7F5)
-                    : Colors.white.withValues(alpha: 0.28),
-                fontSize: 9,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _TimelineButton extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  const _TimelineButton({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(999),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
+          padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.05),
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.09)),
+            color: isLive
+                ? accentColor.withValues(alpha: 0.15)
+                : Colors.white.withValues(alpha: 0.04),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: isLive
+                  ? accentColor.withValues(alpha: 0.4)
+                  : Colors.white.withValues(alpha: 0.06),
+              width: isLive ? 1.2 : 1.0,
+            ),
           ),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 18, color: const Color(0xFFE9B3FF)),
-              const SizedBox(width: 5),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      entry.title,
+                      style: TextStyle(
+                        color: isPast ? Colors.white30 : Colors.white,
+                        fontSize: 12,
+                        fontWeight:
+                            isLive ? FontWeight.w800 : FontWeight.w600,
+                        height: 1.1,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (isLive) ...[
+                    const SizedBox(width: 6),
+                    _badge('LIVE', accentColor),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 4),
               Text(
-                label,
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
+                '${DateFormat('h:mm a').format(entry.start)} - ${DateFormat('h:mm a').format(entry.end)}',
+                style: TextStyle(
+                  color: isLive
+                      ? accentColor.withValues(alpha: 0.7)
+                      : Colors.white24,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
             ],
@@ -1101,23 +1352,150 @@ class _TimelineButton extends StatelessWidget {
       ),
     );
   }
+
+  Widget _badge(String text, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.25),
+        borderRadius: BorderRadius.circular(99),
+        border: Border.all(color: color.withValues(alpha: 0.5)),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          color: color,
+          fontSize: 8,
+          fontWeight: FontWeight.w900,
+          letterSpacing: 0.5,
+        ),
+      ),
+    );
+  }
 }
-class _KeepAliveWrapper extends StatefulWidget {
+
+
+// ─── Keep-alive wrapper ───────────────────────────────────────────────────────
+
+class _KeepAlive extends StatefulWidget {
   final Widget child;
-  const _KeepAliveWrapper({required this.child});
+  const _KeepAlive({required this.child});
 
   @override
-  State<_KeepAliveWrapper> createState() => _KeepAliveWrapperState();
+  State<_KeepAlive> createState() => _KeepAliveState();
 }
 
-class _KeepAliveWrapperState extends State<_KeepAliveWrapper>
+class _KeepAliveState extends State<_KeepAlive>
     with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
     return widget.child;
   }
+}
+
+class _IptvDebugWindow extends StatefulWidget {
+  final IptvProvider provider;
+  const _IptvDebugWindow({required this.provider});
 
   @override
-  bool get wantKeepAlive => true;
+  State<_IptvDebugWindow> createState() => _IptvDebugWindowState();
+}
+
+class _IptvDebugWindowState extends State<_IptvDebugWindow> {
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+  }
+
+  @override
+  void didUpdateWidget(_IptvDebugWindow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _scrollToBottom();
+  }
+
+  void _scrollToBottom() {
+    if (_scrollController.hasClients) {
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final logs = widget.provider.debugLogs;
+
+    return Container(
+      height: 200,
+      margin: const EdgeInsets.fromLTRB(20, 10, 20, 0),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.4),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE9B3FF).withValues(alpha: 0.2)),
+      ),
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+            child: Row(
+              children: [
+                const Icon(Icons.terminal_rounded, size: 14, color: Color(0xFFE9B3FF)),
+                const SizedBox(width: 8),
+                const Text(
+                  'IPTV DEBUG CONSOLE',
+                  style: TextStyle(
+                    color: Color(0xFFE9B3FF),
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1,
+                  ),
+                ),
+                const Spacer(),
+                TextButton(
+                  onPressed: () => widget.provider.clearLogs(),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: const Text('CLEAR', style: TextStyle(color: Colors.white24, fontSize: 10)),
+                ),
+              ],
+            ),
+          ),
+          const Divider(color: Colors.white10, height: 1),
+          Expanded(
+            child: ListView.builder(
+              controller: _scrollController,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              itemCount: logs.length,
+              itemBuilder: (context, index) {
+                final log = logs[index];
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 2),
+                  child: Text(
+                    log,
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../services/download_service.dart';
 
 class DownloadsScreen extends StatefulWidget {
@@ -9,37 +10,33 @@ class DownloadsScreen extends StatefulWidget {
 }
 
 class _DownloadsScreenState extends State<DownloadsScreen> {
-  final DownloadService _downloadService = DownloadService();
+  DownloadService? _downloadService;
   List<DownloadTask> _tasks = [];
   bool _isLoading = true;
 
   @override
-  void initState() {
-    super.initState();
-    _initializeDownloads();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_downloadService == null) {
+      _downloadService = Provider.of<DownloadService>(context);
+      _tasks = _downloadService!.tasks;
+      _isLoading = false;
+      
+      _downloadService!.addListener(_updateTasks);
+    }
   }
 
-  Future<void> _initializeDownloads() async {
-    await _downloadService.initialize();
-    _downloadService.onTaskListChanged = () {
+  void _updateTasks() {
+    if (mounted) {
       setState(() {
-        _tasks = _downloadService.tasks;
+        _tasks = _downloadService!.tasks;
       });
-    };
-    _downloadService.onProgress = (_, __, ___, ____) {
-      setState(() {
-        _tasks = _downloadService.tasks;
-      });
-    };
-    setState(() {
-      _tasks = _downloadService.tasks;
-      _isLoading = false;
-    });
+    }
   }
 
   @override
   void dispose() {
-    _downloadService.dispose();
+    _downloadService?.removeListener(_updateTasks);
     super.dispose();
   }
 
@@ -78,7 +75,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
               ),
               Expanded(
                 child: Text(
-                  _downloadService.downloadDirectory,
+                  _downloadService!.downloadDirectory,
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.56),
                     fontSize: 12,
@@ -88,7 +85,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
               ),
               const SizedBox(width: 12),
               ElevatedButton.icon(
-                onPressed: _downloadService.openDownloadDirectory,
+                onPressed: _downloadService!.openDownloadDirectory,
                 icon: const Icon(Icons.folder_open_rounded, size: 16),
                 label: const Text('Open Folder'),
                 style: ElevatedButton.styleFrom(
@@ -163,7 +160,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
               if (_tasks.any((t) => t.status == DownloadStatus.completed))
                 TextButton(
                   onPressed: () async {
-                    await _downloadService.clearCompleted();
+                    await _downloadService!.clearCompleted();
                   },
                   child: const Text(
                     'Clear Completed',
@@ -199,7 +196,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
         statusText = 'Pending';
         actionWidget = IconButton(
           icon: const Icon(Icons.close_rounded, size: 18, color: Colors.white54),
-          onPressed: () => _downloadService.removeTask(task.id),
+          onPressed: () => _downloadService!.removeTask(task.id),
         );
         break;
       case DownloadStatus.downloading:
@@ -208,24 +205,26 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
         statusText = '${(task.progress * 100).round()}%';
         actionWidget = IconButton(
           icon: const Icon(Icons.cancel_rounded, size: 18, color: Colors.white54),
-          onPressed: () => _downloadService.cancelDownload(task.id),
+          onPressed: () => _downloadService!.cancelDownload(task.id),
         );
         break;
       case DownloadStatus.completed:
         statusIcon = Icons.check_circle_rounded;
         statusColor = const Color(0xFF42E355);
         statusText = 'Completed';
+        final isMp3 = task.fileName.toLowerCase().endsWith('.mp3');
         actionWidget = Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            IconButton(
-              icon: const Icon(Icons.folder_open_rounded, size: 18, color: Colors.white54),
-              tooltip: 'Open Folder',
-              onPressed: () => _downloadService.openDownloadDirectory(),
-            ),
+            if (!isMp3)
+              IconButton(
+                icon: const Icon(Icons.folder_open_rounded, size: 18, color: Colors.white54),
+                tooltip: 'Open Folder',
+                onPressed: () => _downloadService!.openDownloadDirectory(),
+              ),
             IconButton(
               icon: const Icon(Icons.close_rounded, size: 18, color: Colors.white54),
-              onPressed: () => _downloadService.removeTask(task.id),
+              onPressed: () => _downloadService!.removeTask(task.id),
             ),
           ],
         );
@@ -240,11 +239,11 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
             IconButton(
               icon: const Icon(Icons.refresh_rounded, size: 18, color: Colors.white54),
               tooltip: 'Retry',
-              onPressed: () => _downloadService.retryDownload(task.id),
+              onPressed: () => _downloadService!.retryDownload(task.id),
             ),
             IconButton(
               icon: const Icon(Icons.close_rounded, size: 18, color: Colors.white54),
-              onPressed: () => _downloadService.removeTask(task.id),
+              onPressed: () => _downloadService!.removeTask(task.id),
             ),
           ],
         );
@@ -255,7 +254,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
         statusText = 'Cancelled';
         actionWidget = IconButton(
           icon: const Icon(Icons.close_rounded, size: 18, color: Colors.white54),
-          onPressed: () => _downloadService.removeTask(task.id),
+          onPressed: () => _downloadService!.removeTask(task.id),
         );
         break;
     }

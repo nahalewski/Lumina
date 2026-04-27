@@ -114,16 +114,22 @@ class SideNavBar extends StatelessWidget {
             const SizedBox(height: 32),
             // Navigation items
             _NavItem(
+              icon: Icons.movie_rounded,
+              label: 'Movies',
+              isSelected: selectedIndex == 0,
+              onTap: () => onItemSelected(0),
+            ),
+            _NavItem(
+              icon: Icons.tv_rounded,
+              label: 'TV Shows',
+              isSelected: selectedIndex == 2,
+              onTap: () => onItemSelected(2),
+            ),
+            _NavItem(
               icon: Icons.public_rounded,
               label: 'Web Browser',
               isSelected: selectedIndex == 1,
               onTap: () => onItemSelected(1),
-            ),
-            _NavItem(
-              icon: Icons.folder_rounded,
-              label: 'Library',
-              isSelected: selectedIndex == 2,
-              onTap: () => onItemSelected(2),
             ),
             Consumer<MediaProvider>(
               builder: (context, provider, _) {
@@ -168,6 +174,12 @@ class SideNavBar extends StatelessWidget {
               label: 'Comics',
               isSelected: selectedIndex == 14,
               onTap: () => onItemSelected(14),
+            ),
+            _NavItem(
+              icon: Icons.smart_display_rounded,
+              label: 'YouTube',
+              isSelected: selectedIndex == 16,
+              onTap: () => onItemSelected(16),
             ),
             // ─── IPTV Section ──────────────────────────────────────────────
             Padding(

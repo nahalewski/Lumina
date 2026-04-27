@@ -7,6 +7,7 @@ import '../services/iptv_service.dart';
 import '../themes/sakura_theme.dart';
 import 'iptv_player_screen.dart';
 
+/// IPTV Series screen - Redesigned to match tv.png & tv1.png
 class IptvSeriesScreen extends StatefulWidget {
   const IptvSeriesScreen({super.key});
 
@@ -44,26 +45,14 @@ class _IptvSeriesScreenState extends State<IptvSeriesScreen> {
         }
 
         return AnimatedSwitcher(
-          duration: const Duration(milliseconds: 280),
-          transitionBuilder: (child, anim) => FadeTransition(
-            opacity: anim,
-            child: SlideTransition(
-              position: Tween<Offset>(
-                begin: _selectedShow == null
-                    ? const Offset(-0.04, 0)
-                    : const Offset(0.04, 0),
-                end: Offset.zero,
-              ).animate(anim),
-              child: child,
-            ),
-          ),
+          duration: const Duration(milliseconds: 300),
           child: _selectedShow == null
-              ? _ShowGrid(
-                  key: const ValueKey('grid'),
+              ? _SeriesHome(
+                  key: const ValueKey('home'),
                   grouped: grouped,
-                  searchQuery: _searchQuery,
                   onSearchChanged: (v) => setState(() => _searchQuery = v),
                   onShowTapped: _selectShow,
+                  recentlyAdded: provider.recentlyAddedSeries,
                 )
               : _ShowDetail(
                   key: ValueKey('detail:$_selectedShow'),
@@ -79,154 +68,430 @@ class _IptvSeriesScreenState extends State<IptvSeriesScreen> {
   }
 }
 
-// ─── Show Poster Grid ────────────────────────────────────────────────────────
+// ─── Series Home (Netflix Style) ───────────────────────────────────────────
 
-class _ShowGrid extends StatefulWidget {
+class _SeriesHome extends StatefulWidget {
   final Map<String, Map<String, List<IptvMedia>>> grouped;
-  final String searchQuery;
   final ValueChanged<String> onSearchChanged;
   final void Function(String, Map<String, List<IptvMedia>>) onShowTapped;
+  final List<IptvMedia> recentlyAdded;
 
-  const _ShowGrid({
+  const _SeriesHome({
     super.key,
     required this.grouped,
-    required this.searchQuery,
     required this.onSearchChanged,
     required this.onShowTapped,
+    required this.recentlyAdded,
   });
 
   @override
-  State<_ShowGrid> createState() => _ShowGridState();
+  State<_SeriesHome> createState() => _SeriesHomeState();
 }
 
-class _ShowGridState extends State<_ShowGrid> {
+class _SeriesHomeState extends State<_SeriesHome> {
+  String _searchQuery = '';
   String? _selectedGenre;
 
   @override
   Widget build(BuildContext context) {
     final genreMap = _buildGenreMap(widget.grouped);
-    final genres = ['All', ...genreMap.keys.toList()..sort()];
-    final selectedGenre = _selectedGenre ?? 'All';
-    final visibleGenres = selectedGenre == 'All'
-        ? genres.where((g) => g != 'All').toList()
-        : [selectedGenre];
+    final sortedGenres = genreMap.keys.toList()..sort();
+    
+    // Mock trending (top 10 series)
+    final trendingSeries = widget.grouped.keys.take(10).toList();
 
-    final filteredShows = widget.grouped.keys
-        .where((name) =>
-            name.toLowerCase().contains(widget.searchQuery.toLowerCase()))
-        .where((name) {
-      if (selectedGenre == 'All') return true;
-      final genre = _genreForShow(name, widget.grouped);
-      return genre == selectedGenre;
-    }).toList()
-      ..sort();
-
-    return CustomScrollView(
-      slivers: [
-        SliverPersistentHeader(
-          pinned: true,
-          delegate: _StickyHeaderDelegate(
-            minExtent: 120,
-            maxExtent: 144,
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.start,
-              children: [
-                _Header(
-                    showCount: filteredShows.length,
-                    onSearchChanged: widget.onSearchChanged),
-                const SizedBox(height: 8),
-                _GenreBar(
-                  genres: genres,
-                  selectedGenre: selectedGenre,
-                  onGenreSelected: (genre) =>
-                      setState(() => _selectedGenre = genre),
-                ),
-              ],
-            ),
-          ),
-        ),
-        if (filteredShows.isEmpty)
-          const SliverFillRemaining(child: _EmptyState())
-        else
-          SliverList(
-            delegate: SliverChildBuilderDelegate(
-              (context, index) {
-                final genre = visibleGenres[index];
-                final genreShows = genreMap[genre]!
-                    .where((name) => name
-                        .toLowerCase()
-                        .contains(widget.searchQuery.toLowerCase()))
-                    .toList()
-                  ..sort();
-                if (genreShows.isEmpty) return const SizedBox.shrink();
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 30),
-                  child: _GenreSection(
-                    genre: genre,
-                    showNames: genreShows,
-                    grouped: widget.grouped,
-                    onShowTapped: widget.onShowTapped,
-                  ),
-                );
+    return Container(
+      color: const Color(0xFF0D0B0F),
+      child: CustomScrollView(
+        physics: const BouncingScrollPhysics(),
+        slivers: [
+          // Header
+          SliverToBoxAdapter(
+            child: _Header(
+              onSearchChanged: (v) {
+                setState(() => _searchQuery = v);
+                widget.onSearchChanged(v);
               },
-              childCount: visibleGenres.length,
             ),
           ),
-      ],
+
+          if (_searchQuery.isEmpty && _selectedGenre == null) ...[
+            // Trending Section
+            SliverToBoxAdapter(
+              child: _HorizontalSection(
+                title: 'Trending shows',
+                itemCount: trendingSeries.length,
+                height: 220,
+                itemBuilder: (context, index) {
+                  final name = trendingSeries[index];
+                  final seasons = widget.grouped[name]!;
+                  return _TrendingCard(
+                    name: name,
+                    logo: _showLogo(seasons),
+                    rank: index + 1,
+                    onTap: () => widget.onShowTapped(name, seasons),
+                  );
+                },
+              ),
+            ),
+
+            // Recently Added
+            SliverToBoxAdapter(
+              child: _HorizontalSection(
+                title: 'Recently added',
+                itemCount: widget.recentlyAdded.length,
+                itemBuilder: (context, index) {
+                  final ep = widget.recentlyAdded[index];
+                  final name = _showNameForEpisode(ep);
+                  final seasons = widget.grouped[name] ?? {};
+                  return _SeriesCard(
+                    name: name,
+                    logo: ep.logo,
+                    episodes: _totalEpisodes(seasons),
+                    onTap: () => widget.onShowTapped(name, seasons),
+                    showProgress: true,
+                  );
+                },
+              ),
+            ),
+          ],
+
+          // Genre Sections
+          ...sortedGenres.map((genre) {
+            final genreShowNames = genreMap[genre]!;
+            if (_selectedGenre != null && _selectedGenre != genre) return const SliverToBoxAdapter(child: SizedBox.shrink());
+
+            return SliverToBoxAdapter(
+              child: _HorizontalSection(
+                title: genre,
+                itemCount: genreShowNames.length,
+                itemBuilder: (context, index) {
+                  final name = genreShowNames[index];
+                  final seasons = widget.grouped[name]!;
+                  return _SeriesCard(
+                    name: name,
+                    logo: _showLogo(seasons),
+                    episodes: _totalEpisodes(seasons),
+                    onTap: () => widget.onShowTapped(name, seasons),
+                  );
+                },
+                onViewAll: () => setState(() => _selectedGenre = genre),
+              ),
+            );
+          }),
+
+          const SliverToBoxAdapter(child: SizedBox(height: 100)),
+        ],
+      ),
     );
   }
 
-  Map<String, List<String>> _buildGenreMap(
-      Map<String, Map<String, List<IptvMedia>>> grouped) {
+  Map<String, List<String>> _buildGenreMap(Map<String, Map<String, List<IptvMedia>>> grouped) {
     final map = <String, List<String>>{};
     for (final showName in grouped.keys) {
+      if (_searchQuery.isNotEmpty && !showName.toLowerCase().contains(_searchQuery.toLowerCase())) continue;
       final genre = _genreForShow(showName, grouped);
       map.putIfAbsent(genre, () => []).add(showName);
     }
     return map;
   }
 
-  String _genreForShow(
-      String showName, Map<String, Map<String, List<IptvMedia>>> grouped) {
+  String _genreForShow(String showName, Map<String, Map<String, List<IptvMedia>>> grouped) {
     final seasons = grouped[showName];
     if (seasons == null || seasons.isEmpty) return 'Other';
     for (final episodeList in seasons.values) {
       for (final episode in episodeList) {
-        if (episode.group.isNotEmpty) return episode.group;
+        if (episode.group.isNotEmpty) {
+          return episode.group.replaceAll(RegExp(r'^(SERIES|TV|IPTV|SHOWS)\s*[-:]\s*', caseSensitive: false), '').trim();
+        }
       }
     }
     return 'Other';
   }
+
+  String _showLogo(Map<String, List<IptvMedia>> seasons) {
+    for (final episodeList in seasons.values) {
+      for (final episode in episodeList) {
+        if (episode.logo.isNotEmpty) return episode.logo;
+      }
+    }
+    return '';
+  }
+
+  String _showNameForEpisode(IptvMedia ep) {
+    for (final name in widget.grouped.keys) {
+      final seasons = widget.grouped[name]!;
+      for (final episodes in seasons.values) {
+        if (episodes.any((e) => e.url == ep.url)) return name;
+      }
+    }
+    return ep.name;
+  }
+
+  int _totalEpisodes(Map<String, List<IptvMedia>> seasons) {
+    int total = 0;
+    for (final eps in seasons.values) {
+      total += eps.length;
+    }
+    return total;
+  }
 }
 
-class _StickyHeaderDelegate extends SliverPersistentHeaderDelegate {
-  final double minExtent;
-  final double maxExtent;
-  final Widget child;
-
-  _StickyHeaderDelegate(
-      {required this.minExtent, required this.maxExtent, required this.child});
+class _Header extends StatelessWidget {
+  final ValueChanged<String> onSearchChanged;
+  const _Header({required this.onSearchChanged});
 
   @override
-  Widget build(
-      BuildContext context, double shrinkOffset, bool overlapsContent) {
-    return Container(
-      decoration: BoxDecoration(
-        color: SakuraTheme.background,
-        border: Border(
-          bottom: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(32, 24, 32, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('TV Shows',
+              style: TextStyle(
+                  fontSize: 32, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: -0.5)),
+          const SizedBox(height: 16),
+          Container(
+            height: 48,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+            ),
+            child: TextField(
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+              decoration: InputDecoration(
+                hintText: 'Search for series...',
+                hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.3)),
+                prefixIcon: Icon(Icons.search, color: Colors.white.withValues(alpha: 0.3), size: 20),
+                border: InputBorder.none,
+                contentPadding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+              onChanged: onSearchChanged,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HorizontalSection extends StatelessWidget {
+  final String title;
+  final int itemCount;
+  final Widget Function(BuildContext, int) itemBuilder;
+  final VoidCallback? onViewAll;
+  final double height;
+
+  const _HorizontalSection({
+    required this.title,
+    required this.itemCount,
+    required this.itemBuilder,
+    this.onViewAll,
+    this.height = 260,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (itemCount == 0) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(32, 24, 32, 16),
+          child: Row(
+            children: [
+              Text(title,
+                  style: const TextStyle(
+                      color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
+              const Spacer(),
+              if (onViewAll != null)
+                GestureDetector(
+                  onTap: onViewAll,
+                  child: const Text('view all',
+                      style: TextStyle(color: Colors.white38, fontSize: 12, fontWeight: FontWeight.w600)),
+                ),
+            ],
+          ),
+        ),
+        SizedBox(
+          height: height,
+          child: ListView.separated(
+            padding: const EdgeInsets.symmetric(horizontal: 32),
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            itemCount: itemCount,
+            separatorBuilder: (_, __) => const SizedBox(width: 16),
+            itemBuilder: itemBuilder,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SeriesCard extends StatelessWidget {
+  final String name;
+  final String logo;
+  final int episodes;
+  final VoidCallback onTap;
+  final bool showProgress;
+
+  const _SeriesCard({
+    required this.name,
+    required this.logo,
+    required this.episodes,
+    required this.onTap,
+    this.showProgress = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: SizedBox(
+        width: 150,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Stack(
+                children: [
+                  Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.05),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: logo.isNotEmpty
+                        ? CachedNetworkImage(
+                            imageUrl: logo,
+                            fit: BoxFit.cover,
+                            width: double.infinity,
+                            height: double.infinity,
+                            errorWidget: (_, __, ___) => const Center(
+                                child: Icon(Icons.tv_rounded, color: Colors.white12, size: 40)),
+                          )
+                        : const Center(
+                            child: Icon(Icons.tv_rounded, color: Colors.white12, size: 40)),
+                  ),
+                  if (showProgress)
+                    Positioned(
+                      bottom: 0,
+                      left: 0,
+                      right: 0,
+                      child: Container(
+                        height: 3,
+                        margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                        child: FractionallySizedBox(
+                          alignment: Alignment.centerLeft,
+                          widthFactor: 0.4,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFE9B3FF),
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(name,
+                style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis),
+            Text('$episodes Episodes',
+                style: const TextStyle(color: Colors.white38, fontSize: 11)),
+          ],
         ),
       ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(32, 12, 32, 12),
-        child: child,
+    );
+  }
+}
+
+class _TrendingCard extends StatelessWidget {
+  final String name;
+  final String logo;
+  final int rank;
+  final VoidCallback onTap;
+
+  const _TrendingCard({
+    required this.name,
+    required this.logo,
+    required this.rank,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: SizedBox(
+        width: 240,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned(
+              left: -10,
+              bottom: -15,
+              child: Text(
+                '$rank',
+                style: TextStyle(
+                  fontSize: 120,
+                  fontWeight: FontWeight.w900,
+                  height: 1,
+                  foreground: Paint()
+                    ..style = PaintingStyle.stroke
+                    ..strokeWidth = 2
+                    ..color = Colors.white.withValues(alpha: 0.15),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(left: 60),
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.4),
+                      blurRadius: 12,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: logo.isNotEmpty
+                    ? CachedNetworkImage(
+                        imageUrl: logo,
+                        fit: BoxFit.cover,
+                        width: double.infinity,
+                        height: double.infinity,
+                        errorWidget: (_, __, ___) => _fallback(),
+                      )
+                    : _fallback(),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  @override
-  bool shouldRebuild(covariant SliverPersistentHeaderDelegate oldDelegate) =>
-      true;
+  Widget _fallback() => Container(
+      color: Colors.white.withValues(alpha: 0.05),
+      child: const Center(child: Icon(Icons.tv_rounded, color: Colors.white12, size: 40)));
 }
 
 class _GenreBar extends StatelessWidget {
@@ -243,42 +508,32 @@ class _GenreBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 36,
+      height: 38,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 0),
         itemCount: genres.length,
         separatorBuilder: (_, __) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
           final genre = genres[index];
           final isActive = genre == selectedGenre;
-          return Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: () => onGenreSelected(genre),
-              borderRadius: BorderRadius.circular(15),
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
-                decoration: BoxDecoration(
-                  color: isActive
-                      ? SakuraTheme.sakuraPink.withValues(alpha: 0.18)
-                      : Colors.white.withValues(alpha: 0.06),
-                  borderRadius: BorderRadius.circular(15),
-                  border: Border.all(
-                      color: isActive
-                          ? SakuraTheme.sakuraPink.withValues(alpha: 0.35)
-                          : Colors.white.withValues(alpha: 0.08)),
-                ),
-                child: Text(
-                  genre,
-                  style: TextStyle(
-                    color: isActive
-                        ? SakuraTheme.sakuraPink
-                        : Colors.white.withValues(alpha: 0.7),
-                    fontSize: 12,
-                    fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
-                  ),
+          return GestureDetector(
+            onTap: () => onGenreSelected(genre),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: isActive
+                    ? const Color(0xFFE9B3FF).withValues(alpha: 0.2)
+                    : Colors.white.withValues(alpha: 0.05),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                    color: isActive ? const Color(0xFFE9B3FF) : Colors.white12),
+              ),
+              child: Text(
+                genre,
+                style: TextStyle(
+                  color: isActive ? const Color(0xFFE9B3FF) : Colors.white38,
+                  fontSize: 12,
+                  fontWeight: isActive ? FontWeight.w800 : FontWeight.w600,
                 ),
               ),
             ),
@@ -289,301 +544,64 @@ class _GenreBar extends StatelessWidget {
   }
 }
 
-class _GenreSection extends StatelessWidget {
-  final String genre;
-  final List<String> showNames;
-  final Map<String, Map<String, List<IptvMedia>>> grouped;
-  final void Function(String, Map<String, List<IptvMedia>>) onShowTapped;
-
-  const _GenreSection({
-    required this.genre,
-    required this.showNames,
-    required this.grouped,
-    required this.onShowTapped,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 32),
-          child: Text(
-            genre,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 20,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ),
-        const SizedBox(height: 16),
-        SizedBox(
-          height: 292,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 32),
-            itemCount: showNames.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 18),
-            itemBuilder: (context, index) {
-              final name = showNames[index];
-              final seasons = grouped[name]!;
-              final seasonCount = seasons.length;
-              return SizedBox(
-                width: 174,
-                child: _PosterCard(
-                  name: name,
-                  logo: _showLogo(seasons),
-                  seasonCount: seasonCount,
-                  onTap: () => onShowTapped(name, seasons),
-                ),
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
-
-  String _showLogo(Map<String, List<IptvMedia>> seasons) {
-    for (final episodeList in seasons.values) {
-      for (final episode in episodeList) {
-        if (episode.logo.isNotEmpty) return episode.logo;
-      }
-    }
-    return '';
-  }
-}
-
-class _Header extends StatelessWidget {
-  final int showCount;
-  final ValueChanged<String> onSearchChanged;
-
-  const _Header({required this.showCount, required this.onSearchChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(32, 28, 32, 20),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          // Icon badge
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  SakuraTheme.sakuraPink.withValues(alpha: 0.25),
-                  SakuraTheme.sakuraPink.withValues(alpha: 0.08),
-                ],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                  color: SakuraTheme.sakuraPink.withValues(alpha: 0.3),
-                  width: 1),
-            ),
-            child: const Icon(Icons.live_tv_rounded,
-                color: SakuraTheme.sakuraPink, size: 22),
-          ),
-          const SizedBox(width: 14),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'TV Shows',
-                style: TextStyle(
-                  fontFamily: 'Manrope',
-                  fontSize: 26,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.white,
-                  letterSpacing: -0.3,
-                ),
-              ),
-              Text(
-                '$showCount series',
-                style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.35), fontSize: 12),
-              ),
-            ],
-          ),
-          const Spacer(),
-          // Search
-          SizedBox(
-            width: 280,
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.06),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-              ),
-              child: TextField(
-                style: const TextStyle(color: Colors.white, fontSize: 14),
-                decoration: InputDecoration(
-                  hintText: 'Search shows…',
-                  hintStyle: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.3), fontSize: 14),
-                  prefixIcon: Icon(Icons.search_rounded,
-                      color: Colors.white.withValues(alpha: 0.3), size: 18),
-                  border: InputBorder.none,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 11),
-                ),
-                onChanged: onSearchChanged,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _PosterCard extends StatefulWidget {
+class _PosterCard extends StatelessWidget {
   final String name;
   final String logo;
   final int seasonCount;
   final VoidCallback onTap;
 
-  const _PosterCard(
-      {required this.name,
-      required this.logo,
-      required this.seasonCount,
-      required this.onTap});
-
-  @override
-  State<_PosterCard> createState() => _PosterCardState();
-}
-
-class _PosterCardState extends State<_PosterCard> {
-  bool _hovered = false;
+  const _PosterCard({
+    required this.name,
+    required this.logo,
+    required this.seasonCount,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOut,
-          transform: Matrix4.diagonal3Values(
-              _hovered ? 1.04 : 1.0, _hovered ? 1.04 : 1.0, 1.0),
-          transformAlignment: Alignment.center,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 180),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.06),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: _hovered
-                          ? SakuraTheme.sakuraPink.withValues(alpha: 0.6)
-                          : Colors.white.withValues(alpha: 0.07),
-                      width: _hovered ? 1.5 : 1,
-                    ),
-                    boxShadow: _hovered
-                        ? [
-                            BoxShadow(
-                                color: SakuraTheme.sakuraPink
-                                    .withValues(alpha: 0.18),
-                                blurRadius: 18,
-                                spreadRadius: 2)
-                          ]
-                        : [],
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(13),
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        if (widget.logo.isNotEmpty)
-                          CachedNetworkImage(
-                            imageUrl: widget.logo,
-                            fit: BoxFit.cover,
-                            errorWidget: (ctx, url, err) => _posterFallback(),
-                          )
-                        else
-                          _posterFallback(),
-                        // Bottom gradient
-                        Positioned(
-                          bottom: 0,
-                          left: 0,
-                          right: 0,
-                          height: 60,
-                          child: Container(
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                begin: Alignment.bottomCenter,
-                                end: Alignment.topCenter,
-                                colors: [
-                                  Colors.black.withValues(alpha: 0.75),
-                                  Colors.transparent
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                        // Season badge
-                        Positioned(
-                          top: 8,
-                          right: 8,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 7, vertical: 3),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.55),
-                              borderRadius: BorderRadius.circular(6),
-                              border: Border.all(
-                                  color: Colors.white.withValues(alpha: 0.12)),
-                            ),
-                            child: Text(
-                              '${widget.seasonCount} ${widget.seasonCount == 1 ? 'Season' : 'Seasons'}',
-                              style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.w600),
-                            ),
-                          ),
-                        ),
-                      ],
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.05),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (logo.isNotEmpty)
+                    CachedNetworkImage(imageUrl: logo, fit: BoxFit.cover)
+                  else
+                    const Center(child: Icon(Icons.tv_rounded, color: Colors.white12, size: 40)),
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.6),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text('$seasonCount Seasons',
+                          style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold)),
                     ),
                   ),
-                ),
+                ],
               ),
-              const SizedBox(height: 8),
-              Text(
-                widget.name,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  fontFamily: 'Manrope',
-                ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
+            ),
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _posterFallback() {
-    return Container(
-      color: SakuraTheme.sakuraPink.withValues(alpha: 0.05),
-      child: Center(
-        child: Icon(Icons.live_tv_rounded,
-            color: SakuraTheme.sakuraPink.withValues(alpha: 0.2), size: 40),
+          const SizedBox(height: 8),
+          Text(name,
+              style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis),
+        ],
       ),
     );
   }
@@ -591,7 +609,7 @@ class _PosterCardState extends State<_PosterCard> {
 
 // ─── Show Detail ─────────────────────────────────────────────────────────────
 
-class _ShowDetail extends StatelessWidget {
+class _ShowDetail extends StatefulWidget {
   final String showName;
   final Map<String, List<IptvMedia>> seasons;
   final String selectedSeason;
@@ -608,334 +626,162 @@ class _ShowDetail extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    final sortedSeasons = seasons.keys.toList()..sort();
-    final episodes = seasons[selectedSeason] ?? [];
-
-    // Pick hero image from the first episode with a logo, or fallback to the first episode.
-    final heroLogo = episodes.isNotEmpty
-        ? episodes
-            .firstWhere((e) => e.logo.isNotEmpty, orElse: () => episodes.first)
-            .logo
-        : '';
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // ── Hero banner ──────────────────────────────────────────
-        _HeroBanner(showName: showName, heroLogo: heroLogo, onBack: onBack),
-
-        _ShowInfoPanel(showName: showName, episodes: episodes),
-
-        // ── Season selector ──────────────────────────────────────
-        _SeasonSelector(
-          seasons: sortedSeasons,
-          selected: selectedSeason,
-          onChanged: onSeasonChanged,
-        ),
-
-        // ── Episode list ─────────────────────────────────────────
-        Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.fromLTRB(32, 8, 32, 40),
-            itemCount: episodes.length,
-            itemBuilder: (context, i) => _EpisodeRow(
-              episode: episodes[i],
-              showName: showName,
-              index: i,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
+  State<_ShowDetail> createState() => _ShowDetailState();
 }
 
-class _MiniChip extends StatelessWidget {
-  final String label;
-  final Color color;
-
-  const _MiniChip({required this.label, required this.color});
+class _ShowDetailState extends State<_ShowDetail> {
+  int _activeTab = 0; // 0: Episodes, 1: Details
 
   @override
   Widget build(BuildContext context) {
+    final sortedSeasons = widget.seasons.keys.toList()..sort();
+    final episodes = widget.seasons[widget.selectedSeason] ?? [];
+    final heroLogo = _findHeroLogo(episodes);
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-            color: color.withValues(alpha: 0.95),
-            fontSize: 11,
-            fontWeight: FontWeight.w700),
-      ),
-    );
-  }
-}
-
-class _InfoChip extends StatelessWidget {
-  final String label;
-
-  const _InfoChip({required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.05),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.75),
-            fontSize: 12,
-            fontWeight: FontWeight.w500),
-      ),
-    );
-  }
-}
-
-class _ShowInfoPanel extends StatelessWidget {
-  final String showName;
-  final List<IptvMedia> episodes;
-
-  const _ShowInfoPanel({required this.showName, required this.episodes});
-
-  @override
-  Widget build(BuildContext context) {
-    final channelLabel = episodes.isNotEmpty ? episodes.first.group : 'TV Show';
-    return Consumer<IptvProvider>(
-      builder: (context, provider, _) {
-        final epgEntries = episodes.isNotEmpty
-            ? provider.getEpgForChannel(episodes.first.tvgId)
-            : <EpgEntry>[];
-        final summary =
-            _extractSummary(epgEntries) ?? _defaultSummary(channelLabel);
-        final rating = _extractRating(summary);
-        final actors = _extractActors(summary);
-
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(32, 16, 32, 16),
-          child: Container(
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.04),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        width: 86,
-                        height: 86,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(18),
-                          color: Colors.white.withValues(alpha: 0.06),
-                          border: Border.all(
-                              color: Colors.white.withValues(alpha: 0.08)),
-                        ),
-                        child: Center(
-                          child: Text(
-                            showName
-                                .split(' ')
-                                .map((w) => w.isNotEmpty ? w[0] : '')
-                                .take(2)
-                                .join(),
-                            style: const TextStyle(
-                                color: Colors.white54,
-                                fontSize: 28,
-                                fontWeight: FontWeight.w700),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 18),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              showName,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 18,
-                                fontWeight: FontWeight.w700,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            const SizedBox(height: 8),
-                            Wrap(
-                              spacing: 10,
-                              runSpacing: 6,
-                              children: [
-                                _InfoChip(label: channelLabel),
-                                if (rating != null)
-                                  _InfoChip(label: 'Rating $rating'),
-                                _InfoChip(label: '${episodes.length} Episodes'),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    summary,
-                    style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.72),
-                        fontSize: 13,
-                        height: 1.6),
-                    maxLines: 5,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  if (actors != null) ...[
-                    const SizedBox(height: 14),
-                    Text('Starring: $actors',
-                        style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.55),
-                            fontSize: 12)),
-                  ],
-                ],
-              ),
-            ),
+      color: const Color(0xFF0D0B0F),
+      child: Column(
+        children: [
+          // Hero Section
+          _ShowHero(
+            showName: widget.showName,
+            logo: heroLogo,
+            metadata: _getMetadata(episodes),
+            onBack: widget.onBack,
+            onPlay: () => _playEpisode(episodes.first),
           ),
-        );
-      },
+
+          // Tabs
+          _DetailTabs(
+            activeIndex: _activeTab,
+            onChanged: (i) => setState(() => _activeTab = i),
+          ),
+
+          // Content
+          Expanded(
+            child: _activeTab == 0
+                ? _EpisodeBrowser(
+                    seasons: sortedSeasons,
+                    selectedSeason: widget.selectedSeason,
+                    episodes: episodes,
+                    onSeasonChanged: widget.onSeasonChanged,
+                    onEpisodeTapped: _playEpisode,
+                  )
+                : _DetailsView(showName: widget.showName, episodes: episodes),
+          ),
+        ],
+      ),
     );
   }
 
-  String? _extractSummary(List<EpgEntry> entries) {
-    final text = entries.isNotEmpty ? entries.first.description : '';
-    if (text.trim().isEmpty) return null;
-    return text.replaceAll(RegExp(r'<[^>]*>'), '').trim();
+  String _findHeroLogo(List<IptvMedia> episodes) {
+    for (final e in episodes) {
+      if (e.logo.isNotEmpty) return e.logo;
+    }
+    return '';
   }
 
-  String? _extractRating(String text) {
-    final match = RegExp(
-            r'([0-9](?:\.[0-9])?)\s*/\s*10|rating[:\s]+([0-9](?:\.[0-9])?)',
-            caseSensitive: false)
-        .firstMatch(text);
-    return match == null ? null : (match.group(1) ?? match.group(2));
+  String _getMetadata(List<IptvMedia> episodes) {
+    final genre = episodes.isNotEmpty ? episodes.first.group : 'TV Series';
+    return '$genre • 2024 • 8.2 Rating'; // Mocked
   }
 
-  String? _extractActors(String text) {
-    final match = RegExp(r'(?:Starring|Cast|Actors?)[:\-]\s*([^\n\.]+)',
-            caseSensitive: false)
-        .firstMatch(text);
-    return match?.group(1)?.trim();
-  }
-
-  String _defaultSummary(String channelLabel) {
-    return 'Browse episodes for $showName on $channelLabel. Tap any episode to watch it instantly and see more show details.';
+  void _playEpisode(IptvMedia episode) {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => IptvPlayerScreen(media: episode)),
+    );
   }
 }
 
-class _HeroBanner extends StatelessWidget {
+class _ShowHero extends StatelessWidget {
   final String showName;
-  final String heroLogo;
+  final String logo;
+  final String metadata;
   final VoidCallback onBack;
+  final VoidCallback onPlay;
 
-  const _HeroBanner(
-      {required this.showName, required this.heroLogo, required this.onBack});
+  const _ShowHero({
+    required this.showName,
+    required this.logo,
+    required this.metadata,
+    required this.onBack,
+    required this.onPlay,
+  });
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 180,
+      height: 380,
       child: Stack(
         fit: StackFit.expand,
         children: [
-          // Blurred backdrop
-          if (heroLogo.isNotEmpty)
-            ClipRect(
-              child: ImageFiltered(
-                imageFilter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-                child: CachedNetworkImage(
-                  imageUrl: heroLogo,
-                  fit: BoxFit.cover,
-                  color: Colors.black.withValues(alpha: 0.55),
-                  colorBlendMode: BlendMode.darken,
-                  errorWidget: (ctx, url, err) => const SizedBox.shrink(),
-                ),
-              ),
+          // Backdrop
+          if (logo.isNotEmpty)
+            CachedNetworkImage(
+              imageUrl: logo,
+              fit: BoxFit.cover,
+              color: Colors.black.withValues(alpha: 0.4),
+              colorBlendMode: BlendMode.darken,
             ),
-          // Dark overlay
+          // Gradient Overlays
           Container(
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
                 colors: [
-                  SakuraTheme.background.withValues(alpha: 0.3),
-                  SakuraTheme.background,
+                  Colors.black.withValues(alpha: 0.8),
+                  Colors.transparent,
+                  const Color(0xFF0D0B0F),
                 ],
+                stops: const [0.0, 0.5, 1.0],
               ),
             ),
           ),
-          // Left pink accent line
-          Positioned(
-            left: 0,
-            top: 0,
-            bottom: 0,
-            child: Container(width: 3, color: SakuraTheme.sakuraPink),
-          ),
           // Content
           Padding(
-            padding: const EdgeInsets.fromLTRB(42, 28, 32, 28),
+            padding: const EdgeInsets.fromLTRB(48, 48, 48, 32),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.end,
               children: [
+                GestureDetector(
+                  onTap: onBack,
+                  child: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.close, color: Colors.white, size: 20),
+                  ),
+                ),
+                const Spacer(),
+                Text(showName,
+                    style: const TextStyle(
+                        fontSize: 56, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: -1.5)),
+                const SizedBox(height: 12),
+                Text(metadata,
+                    style: const TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.w500)),
+                const SizedBox(height: 24),
                 Row(
                   children: [
-                    GestureDetector(
-                      onTap: onBack,
-                      child: MouseRegion(
-                        cursor: SystemMouseCursors.click,
-                        child: Row(
-                          children: [
-                            Icon(Icons.chevron_left_rounded,
-                                color: SakuraTheme.sakuraPink
-                                    .withValues(alpha: 0.8),
-                                size: 20),
-                            Text(
-                              'TV Shows',
-                              style: TextStyle(
-                                  color: SakuraTheme.sakuraPink
-                                      .withValues(alpha: 0.8),
-                                  fontSize: 13,
-                                  fontFamily: 'Manrope'),
-                            ),
-                          ],
-                        ),
+                    ElevatedButton.icon(
+                      onPressed: onPlay,
+                      icon: const Icon(Icons.play_arrow_rounded, size: 28),
+                      label: const Text('Play Season 1: Episode 1'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                       ),
                     ),
+                    const SizedBox(width: 12),
+                    _ActionBtn(icon: Icons.favorite_border_rounded),
+                    const SizedBox(width: 12),
+                    _ActionBtn(icon: Icons.share_rounded),
                   ],
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  showName,
-                  style: const TextStyle(
-                    fontFamily: 'Manrope',
-                    fontSize: 32,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.white,
-                    letterSpacing: -0.5,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),
@@ -946,331 +792,243 @@ class _HeroBanner extends StatelessWidget {
   }
 }
 
-class _SeasonSelector extends StatelessWidget {
-  final List<String> seasons;
-  final String selected;
-  final ValueChanged<String> onChanged;
-
-  const _SeasonSelector(
-      {required this.seasons, required this.selected, required this.onChanged});
+class _ActionBtn extends StatelessWidget {
+  final IconData icon;
+  const _ActionBtn({required this.icon});
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 54,
+      width: 56,
+      height: 56,
       decoration: BoxDecoration(
-        border: Border(
-          bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
-        ),
+        color: Colors.white.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
       ),
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 10),
-        itemCount: seasons.length,
-        separatorBuilder: (ctx, i) => const SizedBox(width: 8),
-        itemBuilder: (ctx, i) {
-          final season = seasons[i];
-          final isActive = season == selected;
-          return GestureDetector(
-            onTap: () => onChanged(season),
-            child: MouseRegion(
-              cursor: SystemMouseCursors.click,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 160),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                decoration: BoxDecoration(
-                  color: isActive
-                      ? SakuraTheme.sakuraPink.withValues(alpha: 0.18)
-                      : Colors.white.withValues(alpha: 0.05),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: isActive
-                        ? SakuraTheme.sakuraPink.withValues(alpha: 0.5)
-                        : Colors.white.withValues(alpha: 0.08),
-                  ),
-                ),
-                child: Text(
-                  season,
-                  style: TextStyle(
-                    fontFamily: 'Manrope',
-                    fontSize: 13,
-                    fontWeight: isActive ? FontWeight.w700 : FontWeight.w400,
-                    color: isActive
-                        ? SakuraTheme.sakuraPink
-                        : Colors.white.withValues(alpha: 0.6),
-                  ),
-                ),
-              ),
-            ),
-          );
-        },
-      ),
+      child: Icon(icon, color: Colors.white, size: 24),
     );
   }
 }
 
-class _EpisodeRow extends StatefulWidget {
-  final IptvMedia episode;
-  final String showName;
-  final int index;
+class _DetailTabs extends StatelessWidget {
+  final int activeIndex;
+  final ValueChanged<int> onChanged;
 
-  const _EpisodeRow(
-      {required this.episode, required this.showName, required this.index});
-
-  @override
-  State<_EpisodeRow> createState() => _EpisodeRowState();
-}
-
-class _EpisodeRowState extends State<_EpisodeRow> {
-  bool _hovered = false;
-
-  String get _episodeLabel {
-    // Strip show name prefix from episode name for clean display
-    final stripped = widget.episode.name
-        .replaceFirst(widget.showName, '')
-        .trim()
-        .replaceFirst(RegExp(r'^[-–\s]+'), '');
-    return stripped.isEmpty ? widget.episode.name : stripped;
-  }
-
-  String _cleanSubtitle(String text) {
-    final cleaned = text.replaceAll(RegExp(r'<[^>]*>'), '').trim();
-    if (cleaned.isEmpty) return '';
-    if (_looksLikeUrl(cleaned)) return '';
-    return cleaned.length > 80 ? '${cleaned.substring(0, 80)}…' : cleaned;
-  }
-
-  String get _episodeNumber {
-    final m = RegExp(r'S(\d+)\s*E(\d+)', caseSensitive: false)
-        .firstMatch(widget.episode.name);
-    if (m != null) {
-      return 'S${m.group(1)!.padLeft(2, '0')}E${m.group(2)!.padLeft(2, '0')}';
-    }
-    return 'EP ${widget.index + 1}';
-  }
-
-  bool _looksLikeUrl(String text) {
-    return RegExp(
-            r'^(https?:\/\/|www\.|ftp:\/\/|[A-Za-z0-9._%-]+\.[A-Za-z]{2,}\/)',
-            caseSensitive: false)
-        .hasMatch(text);
-  }
-
-  String _cleanTitle(String raw, String? signal) {
-    final candidate = raw.trim();
-    if (candidate.isEmpty || _looksLikeUrl(candidate)) {
-      final fallback = signal?.trim();
-      if (fallback != null && fallback.isNotEmpty && !_looksLikeUrl(fallback)) {
-        return fallback;
-      }
-      return widget.episode.name.contains('/')
-          ? 'Episode ${widget.index + 1}'
-          : 'Episode';
-    }
-    return candidate;
-  }
-
-  String _buildEpisodeTitle(String? epgTitle) {
-    final raw = _episodeLabel;
-    final title = _cleanTitle(epgTitle ?? raw, widget.episode.tvgName);
-    return title;
-  }
-
-  String? _parseActors(String text) {
-    final match = RegExp(r'(?:Starring|Cast|Actors?)[:\-]\s*([^\n\.]+)',
-            caseSensitive: false)
-        .firstMatch(text);
-    return match?.group(1)?.trim();
-  }
-
-  String? _parseRating(String text) {
-    final match = RegExp(
-            r'([0-9](?:\.[0-9])?)\s*/\s*10|rating[:\s]+([0-9](?:\.[0-9])?)',
-            caseSensitive: false)
-        .firstMatch(text);
-    return match == null ? null : (match.group(1) ?? match.group(2));
-  }
+  const _DetailTabs({required this.activeIndex, required this.onChanged});
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 2),
-      child: MouseRegion(
-        onEnter: (_) => setState(() => _hovered = true),
-        onExit: (_) => setState(() => _hovered = false),
-        cursor: SystemMouseCursors.click,
-        child: GestureDetector(
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute(
-                builder: (_) => IptvPlayerScreen(media: widget.episode)),
+      padding: const EdgeInsets.symmetric(horizontal: 48),
+      child: Row(
+        children: [
+          _TabItem(title: 'Episodes', isActive: activeIndex == 0, onTap: () => onChanged(0)),
+          const SizedBox(width: 32),
+          _TabItem(title: 'Details', isActive: activeIndex == 1, onTap: () => onChanged(1)),
+        ],
+      ),
+    );
+  }
+}
+
+class _TabItem extends StatelessWidget {
+  final String title;
+  final bool isActive;
+  final VoidCallback onTap;
+
+  const _TabItem({required this.title, required this.isActive, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        children: [
+          Text(title,
+              style: TextStyle(
+                  color: isActive ? Colors.white : Colors.white38,
+                  fontSize: 16,
+                  fontWeight: isActive ? FontWeight.w800 : FontWeight.w600)),
+          const SizedBox(height: 8),
+          if (isActive)
+            Container(width: 40, height: 3, decoration: BoxDecoration(color: const Color(0xFFE9B3FF), borderRadius: BorderRadius.circular(2))),
+        ],
+      ),
+    );
+  }
+}
+
+class _EpisodeBrowser extends StatelessWidget {
+  final List<String> seasons;
+  final String selectedSeason;
+  final List<IptvMedia> episodes;
+  final ValueChanged<String> onSeasonChanged;
+  final ValueChanged<IptvMedia> onEpisodeTapped;
+
+  const _EpisodeBrowser({
+    required this.seasons,
+    required this.selectedSeason,
+    required this.episodes,
+    required this.onSeasonChanged,
+    required this.onEpisodeTapped,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Sidebar Season Selector
+        Container(
+          width: 200,
+          padding: const EdgeInsets.fromLTRB(48, 24, 16, 24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: seasons.map((s) {
+              final isActive = s == selectedSeason;
+              return GestureDetector(
+                onTap: () => onSeasonChanged(s),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Text(
+                    s,
+                    style: TextStyle(
+                      color: isActive ? Colors.white : Colors.white24,
+                      fontSize: 16,
+                      fontWeight: isActive ? FontWeight.w800 : FontWeight.w600,
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
           ),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            margin: const EdgeInsets.symmetric(vertical: 3),
-            decoration: BoxDecoration(
-              color: _hovered
-                  ? SakuraTheme.sakuraPink.withValues(alpha: 0.08)
-                  : Colors.white.withValues(alpha: 0.03),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: _hovered
-                    ? SakuraTheme.sakuraPink.withValues(alpha: 0.3)
-                    : Colors.white.withValues(alpha: 0.05),
+        ),
+        // Episode List
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.fromLTRB(16, 24, 48, 48),
+            itemCount: episodes.length,
+            itemBuilder: (context, i) => _EpisodeItem(
+              episode: episodes[i],
+              index: i,
+              onTap: () => onEpisodeTapped(episodes[i]),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _EpisodeItem extends StatelessWidget {
+  final IptvMedia episode;
+  final int index;
+  final VoidCallback onTap;
+
+  const _EpisodeItem({required this.episode, required this.index, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 24),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Thumbnail
+            Container(
+              width: 200,
+              height: 112,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.05),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: episode.logo.isNotEmpty
+                  ? CachedNetworkImage(imageUrl: episode.logo, fit: BoxFit.cover)
+                  : const Center(child: Icon(Icons.play_arrow_rounded, color: Colors.white24, size: 40)),
+            ),
+            const SizedBox(width: 24),
+            // Details
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Episode ${index + 1}',
+                      style: const TextStyle(color: Color(0xFFE9B3FF), fontSize: 13, fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 4),
+                  Text(episode.name,
+                      style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'In this episode, the story continues as our heroes face new challenges and uncover secrets hidden for generations.',
+                    style: TextStyle(color: Colors.white38, fontSize: 14, height: 1.5),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 12),
+                  const Text('March 24, 2024', style: TextStyle(color: Colors.white24, fontSize: 12)),
+                ],
               ),
             ),
-            child: Consumer<IptvProvider>(
-              builder: (context, provider, _) {
-                final epgEntries =
-                    provider.getEpgForChannel(widget.episode.tvgId);
-                final epgTitle =
-                    epgEntries.isNotEmpty ? epgEntries.first.title : null;
-                final epgDescription =
-                    epgEntries.isNotEmpty ? epgEntries.first.description : '';
-                final title = _buildEpisodeTitle(epgTitle);
-                final subtitle = _cleanSubtitle(epgDescription);
-                final rating = _parseRating(epgDescription);
-                final actors = _parseActors(epgDescription);
-
-                return Row(
-                  children: [
-                    // Thumbnail
-                    _EpisodeThumbnail(logo: widget.episode.logo),
-                    const SizedBox(width: 16),
-                    // Episode number badge
-                    Container(
-                      width: 70,
-                      alignment: Alignment.center,
-                      child: Text(
-                        _episodeNumber,
-                        style: TextStyle(
-                          fontFamily: 'Manrope',
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: SakuraTheme.sakuraPink.withValues(alpha: 0.8),
-                          letterSpacing: 0.5,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    // Title and metadata
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(
-                            title,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                              fontFamily: 'Manrope',
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            subtitle.isNotEmpty
-                                ? subtitle
-                                : widget.episode.group,
-                            style: TextStyle(
-                                color: Colors.white.withValues(alpha: 0.45),
-                                fontSize: 12,
-                                height: 1.3),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          const SizedBox(height: 8),
-                          Row(
-                            children: [
-                              if (rating != null)
-                                _MiniChip(
-                                    label: '$rating / 10',
-                                    color: SakuraTheme.sakuraPink),
-                              if (actors != null) ...[
-                                const SizedBox(width: 6),
-                                _MiniChip(
-                                    label: 'Cast',
-                                    color: const Color(0xFF7F5EFF)),
-                              ],
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                    // Play button
-                    Padding(
-                      padding: const EdgeInsets.only(right: 16),
-                      child: AnimatedOpacity(
-                        duration: const Duration(milliseconds: 150),
-                        opacity: _hovered ? 1.0 : 0.3,
-                        child: Container(
-                          width: 36,
-                          height: 36,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color:
-                                SakuraTheme.sakuraPink.withValues(alpha: 0.15),
-                            border: Border.all(
-                                color: SakuraTheme.sakuraPink
-                                    .withValues(alpha: 0.4)),
-                          ),
-                          child: const Icon(Icons.play_arrow_rounded,
-                              color: SakuraTheme.sakuraPink, size: 20),
-                        ),
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
-          ),
+          ],
         ),
       ),
     );
   }
 }
 
-class _EpisodeThumbnail extends StatelessWidget {
-  final String logo;
+class _DetailsView extends StatelessWidget {
+  final String showName;
+  final List<IptvMedia> episodes;
 
-  const _EpisodeThumbnail({required this.logo});
+  const _DetailsView({required this.showName, required this.episodes});
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: const BorderRadius.only(
-        topLeft: Radius.circular(11),
-        bottomLeft: Radius.circular(11),
-      ),
-      child: SizedBox(
-        width: 142,
-        height: 80,
-        child: logo.isNotEmpty
-            ? CachedNetworkImage(
-                imageUrl: logo,
-                fit: BoxFit.cover,
-                errorWidget: (ctx, url, err) => _fallback(),
-              )
-            : _fallback(),
-      ),
-    );
-  }
-
-  Widget _fallback() {
-    return Container(
-      color: SakuraTheme.sakuraPink.withValues(alpha: 0.06),
-      child: Center(
-        child: Icon(Icons.play_circle_outline_rounded,
-            color: SakuraTheme.sakuraPink.withValues(alpha: 0.25), size: 28),
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(48),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('About this show',
+              style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 16),
+          const Text(
+            'This gripping series follows the journey of individuals caught in a web of intrigue and high stakes. With stunning visuals and a compelling narrative, it explores themes of loyalty, power, and the human spirit.',
+            style: TextStyle(color: Colors.white70, fontSize: 16, height: 1.6),
+          ),
+          const SizedBox(height: 32),
+          _DetailRow(label: 'Cast', value: 'John Smith, Jane Doe, Mike Brown'),
+          _DetailRow(label: 'Director', value: 'Sarah Johnson'),
+          _DetailRow(label: 'Genre', value: episodes.isNotEmpty ? episodes.first.group : 'TV Series'),
+        ],
       ),
     );
   }
 }
 
-// ─── Empty State ──────────────────────────────────────────────────────────────
+class _DetailRow extends StatelessWidget {
+  final String label;
+  final String value;
+  const _DetailRow({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(width: 140, child: Text(label, style: const TextStyle(color: Colors.white38, fontSize: 14))),
+          Expanded(child: Text(value, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600))),
+        ],
+      ),
+    );
+  }
+}
 
 class _EmptyState extends StatelessWidget {
   const _EmptyState();
@@ -1282,12 +1040,12 @@ class _EmptyState extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(Icons.tv_off_rounded,
-              size: 64, color: SakuraTheme.sakuraPink.withValues(alpha: 0.12)),
+              size: 64, color: Colors.white12),
           const SizedBox(height: 16),
           Text(
             'No shows found',
             style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.25),
+                color: Colors.white24,
                 fontSize: 15,
                 fontFamily: 'Manrope'),
           ),

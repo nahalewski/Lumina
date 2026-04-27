@@ -23,7 +23,7 @@ class MusicBrainzProvider implements MusicMetadataProvider {
 
   @override
   Future<List<MusicTrack>> searchTracks(String query, {int limit = 20}) async {
-    final url = '$_baseUrl/recording?query=artist:"$query"&limit=$limit&fmt=json';
+    final url = '$_baseUrl/recording?query=${Uri.encodeComponent(query)}&limit=$limit&fmt=json';
     debugPrint('MusicBrainz: Searching for tracks by artist "$query"');
     try {
       final response = await http.get(Uri.parse(url), headers: _headers);

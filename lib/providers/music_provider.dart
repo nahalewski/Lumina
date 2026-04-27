@@ -14,7 +14,7 @@ class MusicProvider extends ChangeNotifier {
   final AudioMatchService _matchService = AudioMatchService();
   final DBService _db = DBService.instance;
 
-  List<MusicTrack> _searchResults = [];
+  MusicSearchResults _searchResults = MusicSearchResults();
   bool _isSearching = false;
   int _searchId = 0;
 
@@ -24,7 +24,7 @@ class MusicProvider extends ChangeNotifier {
   }
 
   MusicProviderSettings get settings => _settings;
-  List<MusicTrack> get searchResults => _searchResults;
+  MusicSearchResults get searchResults => _searchResults;
   bool get isSearching => _isSearching;
 
   Future<void> _loadSettings() async {
@@ -58,7 +58,7 @@ class MusicProvider extends ChangeNotifier {
     final myId = ++_searchId;
 
     if (query.isEmpty) {
-      _searchResults = [];
+      _searchResults = MusicSearchResults();
       _isSearching = false;
       notifyListeners();
       return;
@@ -68,9 +68,19 @@ class MusicProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final results = await _searchService.searchTracks(query);
-      if (myId != _searchId) return; // A newer search has started — discard
-      _searchResults = results;
+      final results = await Future.wait([
+        _searchService.searchTracks(query),
+        _searchService.searchAlbums(query),
+        _searchService.searchArtists(query),
+      ]);
+      
+      if (myId != _searchId) return;
+
+      _searchResults = MusicSearchResults(
+        tracks: results[0] as List<MusicTrack>,
+        albums: results[1] as List<MusicAlbum>,
+        artists: results[2] as List<MusicArtist>,
+      );
     } catch (e) {
       debugPrint('Search error: $e');
     } finally {

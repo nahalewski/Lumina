@@ -4,7 +4,8 @@
       "Bash(dart analyze *)",
       "Bash(xargs grep *)",
       "Bash(flutter analyze *)",
-      "Bash(grep -A 25 \"Map<String, bool> scraperToggles = {\" /c/Users/Ben/Desktop/lumina/lib/models/media_model.dart)"
+      "Bash(grep -A 25 \"Map<String, bool> scraperToggles = {\" /c/Users/Ben/Desktop/lumina/lib/models/media_model.dart)",
+      "Bash(grep -E \"\\\\.\\(dart|java|kt\\)$\")"
     ]
   }
 }

@@ -30,8 +30,8 @@ class _TvMainShellState extends State<TvMainShell> {
     setState(() => _selectedNavIndex = index);
   }
 
-  // Keep selectedNavIndex clamped to valid range now that we have 9 screens
-  int get _clampedIndex => _selectedNavIndex.clamp(0, 8);
+  // Keep selectedNavIndex clamped to valid range now that we have 11 screens
+  int get _clampedIndex => _selectedNavIndex.clamp(0, 10);
 
   @override
   Widget build(BuildContext context) {
@@ -77,15 +77,25 @@ class _TvMainShellState extends State<TvMainShell> {
                         child: IndexedStack(
                           index: _clampedIndex,
                           children: [
-                            const IptvLiveScreen(),
-                            const TvGuideScreen(),
-                            const IptvMoviesScreen(),
-                            const IptvSeriesScreen(),
-                            DocumentLibraryScreen(type: DocumentLibraryType.ebooks),
-                            DocumentLibraryScreen(type: DocumentLibraryType.manga),
-                            DocumentLibraryScreen(type: DocumentLibraryType.comics),
-                            TvNowPlayingScreen(onBack: () => _navigateToSection(0)),
-                            const SettingsScreen(),
+                            const IptvLiveScreen(), // 0
+                            const TvGuideScreen(), // 1
+                            const IptvMoviesScreen(), // 2
+                            const IptvSeriesScreen(), // 3
+                            DocumentLibraryScreen(type: DocumentLibraryType.ebooks), // 4
+                            DocumentLibraryScreen(type: DocumentLibraryType.manga), // 5
+                            DocumentLibraryScreen(type: DocumentLibraryType.comics), // 6
+                            LibraryScreen(
+                              onPlayMedia: (p) {}, // Local Movies
+                              initialSection: LibrarySection.movies,
+                              showSegmentedControl: false,
+                            ), // 7
+                            LibraryScreen(
+                              onPlayMedia: (p) {}, // Local TV Shows
+                              initialSection: LibrarySection.tv,
+                              showSegmentedControl: false,
+                            ), // 8
+                            TvNowPlayingScreen(onBack: () => _navigateToSection(0)), // 9
+                            const SettingsScreen(), // 10
                           ],
                         ),
                       ),

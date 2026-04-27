@@ -121,6 +121,20 @@ class MusicArtist {
   });
 }
 
+class MusicSearchResults {
+  final List<MusicTrack> tracks;
+  final List<MusicAlbum> albums;
+  final List<MusicArtist> artists;
+
+  MusicSearchResults({
+    this.tracks = const [],
+    this.albums = const [],
+    this.artists = const [],
+  });
+
+  bool get isEmpty => tracks.isEmpty && albums.isEmpty && artists.isEmpty;
+}
+
 class MusicMatch {
   final String trackId; // Metadata ID (e.g. Spotify)
   final String? localFilePath;

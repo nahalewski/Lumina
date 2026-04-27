@@ -1,4 +1,6 @@
 import 'dart:io';
+import 'dart:convert';
+import 'package:path/path.dart' as p;
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
@@ -80,9 +82,12 @@ class YtDlpService {
           final filename = file.name;
           if (file.isFile) {
             final data = file.content as List<int>;
-            // We only really need ffmpeg.exe from the bin folder
+            // We need ffmpeg.exe and ffprobe.exe from the bin folder
             if (filename.contains('bin/ffmpeg.exe')) {
               final outFile = File('$binPath/ffmpeg.exe');
+              await outFile.writeAsBytes(data);
+            } else if (filename.contains('bin/ffprobe.exe')) {
+              final outFile = File('$binPath/ffprobe.exe');
               await outFile.writeAsBytes(data);
             }
           }
@@ -122,81 +127,124 @@ class YtDlpService {
       '--add-metadata',
       if (ffmpeg != null) ...['--ffmpeg-location', ffmpeg],
       '-o', '$saveDir/%(title)s.%(ext)s',
+      '--print', 'after_move:filepath', // Get exact final path
       url,
     ];
 
+    String? finalPath;
+
     try {
+      debugPrint('MediaProvider: Starting download: $url');
+      debugPrint('MediaProvider: Command: $exePath ${args.join(' ')}');
+      
       final result = await Process.run(exePath, args);
+      
       if (result.exitCode == 0) {
-        // Find the downloaded file
+        final lines = result.stdout.toString().trim().split('\n');
+        finalPath = lines.last.trim();
+        if (finalPath.isEmpty || !File(finalPath).existsSync()) {
+           finalPath = null;
+        }
+      } else {
+        debugPrint('MediaProvider: yt-dlp failed with exit code ${result.exitCode}');
+        debugPrint('MediaProvider: Error: ${result.stderr}');
+      }
+
+      // Fallback: search directory for the most recent mp3
+      if (finalPath == null) {
+        debugPrint('MediaProvider: Falling back to directory scan...');
         final dir = Directory(saveDir);
         final files = await dir.list().toList();
-        
-        // Return the latest modified file in the directory (heuristic)
         files.sort((a, b) => b.statSync().modified.compareTo(a.statSync().modified));
         
-        String? finalPath;
         for (final file in files) {
-          final path = file.path.toLowerCase();
-          // Prioritize mp3
-          if (path.endsWith('.mp3')) {
-            finalPath = file.path;
-            break;
-          }
-        }
-        
-        // Fallback to other audio formats if mp3 not found
-        if (finalPath == null) {
-          for (final file in files) {
-            final path = file.path.toLowerCase();
-            if (path.endsWith('.webm') || path.endsWith('.m4a') || path.endsWith('.opus')) {
+          if (file.path.toLowerCase().endsWith('.mp3')) {
+            if (DateTime.now().difference(file.statSync().modified).inMinutes < 2) {
               finalPath = file.path;
               break;
             }
           }
         }
+      }
 
-        if (finalPath != null) {
-          // Apply high-quality Spotify metadata/artwork if available
-          await _applySpotifyMetadata(finalPath, spotifyMetadata);
-          
-          // Rename file based on Spotify metadata if available
-          if (spotifyMetadata != null) {
-            try {
-              final title = spotifyMetadata['name']?.toString() ?? '';
-              final artist = (spotifyMetadata['artists'] as List?)?.first['name']?.toString() ?? '';
-              if (title.isNotEmpty && artist.isNotEmpty) {
-                final ext = finalPath.split('.').last;
-                final newName = '$artist - $title.$ext'.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
-                final newPath = '${Directory(finalPath).parent.path}/$newName';
-                if (finalPath != newPath) {
-                  final newFile = await File(finalPath).rename(newPath);
-                  finalPath = newFile.path;
-                }
+      if (finalPath != null) {
+        debugPrint('MediaProvider: Download successful: $finalPath');
+        
+        // Apply high-quality Spotify metadata/artwork if available
+        await _applySpotifyMetadata(finalPath, spotifyMetadata);
+        
+        // Rename file based on Spotify metadata if available
+        if (spotifyMetadata != null) {
+          try {
+            final title = spotifyMetadata['name']?.toString() ?? '';
+            final artist = (spotifyMetadata['artists'] as List?)?.first['name']?.toString() ?? '';
+            if (title.isNotEmpty && artist.isNotEmpty) {
+              final ext = finalPath.split('.').last;
+              final newName = '$artist - $title.$ext'.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+              final newPath = '${p.dirname(finalPath)}/$newName';
+              if (finalPath != newPath) {
+                final newFile = await File(finalPath).rename(newPath);
+                finalPath = newFile.path;
               }
-            } catch (e) {
-              debugPrint('Error renaming file: $e');
             }
+          } catch (e) {
+            debugPrint('Error renaming file: $e');
           }
-
-          // Clean up any leftover image files from yt-dlp (e.g., .webp, .jpg, .png)
-          final baseName = finalPath!.replaceAll(RegExp(r'\.[^.]+$'), '');
-          for (final ext in ['.webp', '.jpg', '.png', '.jpeg']) {
-            final imgFile = File('$baseName$ext');
-            if (await imgFile.exists()) {
-              await imgFile.delete().catchError((_) => imgFile);
-            }
-          }
-          
-          return finalPath;
         }
-      } else {
-        debugPrint('yt-dlp error: ${result.stderr}');
+
+        // Clean up any leftover image files from yt-dlp
+        final baseName = finalPath!.replaceAll(RegExp(r'\.[^.]+$'), '');
+        for (final ext in ['.webp', '.jpg', '.png', '.jpeg']) {
+          final imgFile = File('$baseName$ext');
+          if (await imgFile.exists()) {
+            await imgFile.delete().catchError((_) => imgFile);
+          }
+        }
+        
+        return finalPath;
       }
     } catch (e) {
-      debugPrint('Download error: $e');
+      debugPrint('MediaProvider: Exception during download: $e');
     }
     return null;
+  }
+
+  Future<Map<String, String>> getMediaMetadata(String filePath) async {
+    final ffmpeg = await _findFfmpeg();
+    if (ffmpeg == null) return {};
+
+    // ffprobe is usually in the same directory as ffmpeg
+    final ffprobe = ffmpeg.replaceAll('ffmpeg', 'ffprobe');
+    if (!File(ffprobe).existsSync()) return {};
+
+    final args = [
+      '-v', 'quiet',
+      '-print_format', 'json',
+      '-show_format',
+      filePath,
+    ];
+
+    try {
+      final result = await Process.run(ffprobe, args);
+      if (result.exitCode == 0) {
+        final data = jsonDecode(result.stdout.toString()) as Map<String, dynamic>;
+        final format = data['format'] as Map<String, dynamic>?;
+        final tags = format?['tags'] as Map<String, dynamic>?;
+        
+        if (tags != null) {
+          return {
+            'title': tags['title']?.toString() ?? '',
+            'artist': tags['artist']?.toString() ?? '',
+            'album': tags['album']?.toString() ?? '',
+            'date': tags['date']?.toString() ?? '',
+            'track': tags['track']?.toString() ?? '',
+          };
+        }
+      }
+    } catch (e) {
+      debugPrint('Error extracting metadata with ffprobe: $e');
+    }
+    return {};
   }
 
   Future<void> _applySpotifyMetadata(

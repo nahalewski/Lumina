@@ -32,8 +32,11 @@ import 'services/ebook_manga_metadata_service.dart';
 import 'screens/user_management_screen.dart';
 import 'screens/downloads_screen.dart';
 import 'screens/tv/tv_main_shell.dart';
+import 'services/download_service.dart';
 import 'widgets/iptv_pip_overlay.dart';
 import 'widgets/falling_particles.dart';
+import 'providers/youtube_provider.dart';
+import 'screens/youtube_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -94,6 +97,8 @@ class LuminaMediaApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => IptvProvider()..initialize()),
         ChangeNotifierProvider(create: (_) => IptvPipProvider()),
         ChangeNotifierProvider(create: (_) => MusicProvider()),
+        ChangeNotifierProvider(create: (_) => DownloadService()..initialize()),
+        ChangeNotifierProvider(create: (_) => YouTubeProvider()),
       ],
       child: Builder(
         builder: (context) {
@@ -102,7 +107,11 @@ class LuminaMediaApp extends StatelessWidget {
               Provider.of<MediaProvider>(context, listen: false);
           final iptvProvider =
               Provider.of<IptvProvider>(context, listen: false);
+          final downloadService =
+              Provider.of<DownloadService>(context, listen: false);
+          
           mediaProvider.setIptvProviderForServer(iptvProvider);
+          mediaProvider.setDownloadService(downloadService);
 
           return MaterialApp(
             title: 'Lumina Media',
@@ -193,9 +202,8 @@ class MainShell extends StatefulWidget {
   State<MainShell> createState() => _MainShellState();
 }
 
-class _MainShellState extends State<MainShell> {
+class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   int _selectedNavIndex = Platform.isAndroid || Platform.isIOS ? 0 : 2;
-  bool _showQueue = false;
   bool _isNsfwUnlocked = false;
 
   bool get _isMobile => Platform.isAndroid || Platform.isIOS;
@@ -203,6 +211,7 @@ class _MainShellState extends State<MainShell> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     // Phase 3: Automatically check for installed models and play menu music on launch
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final mediaProvider = Provider.of<MediaProvider>(context, listen: false);
@@ -219,8 +228,24 @@ class _MainShellState extends State<MainShell> {
 
   void _navigateToNowPlaying() {
     setState(() {
-      _selectedNavIndex = _isMobile ? 5 : 4;
+      _selectedNavIndex = _isMobile ? 6 : 4;
     });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    final mediaProvider = Provider.of<MediaProvider>(context, listen: false);
+    mediaProvider.stopMediaServer().ignore(); // Clean shutdown
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.detached) {
+      final mediaProvider = Provider.of<MediaProvider>(context, listen: false);
+      mediaProvider.stopMediaServer().ignore();
+    }
   }
 
   void _navigateBack() {
@@ -341,12 +366,16 @@ class _MainShellState extends State<MainShell> {
                           index: _selectedNavIndex,
                           children: [
                             LibraryScreen(
-                                onPlayMedia:
-                                    _navigateToNowPlaying), // 0 - Home (Library)
+                                onPlayMedia: _navigateToNowPlaying,
+                                initialSection: LibrarySection.movies,
+                                showSegmentedControl: false,
+                                isNsfwUnlocked: _isNsfwUnlocked), // 0 - Movies
                             const WebBrowserScreen(), // 1 - Web Browser
                             LibraryScreen(
-                                onPlayMedia:
-                                    _navigateToNowPlaying), // 2 - Library
+                                onPlayMedia: _navigateToNowPlaying,
+                                initialSection: LibrarySection.tv,
+                                showSegmentedControl: false,
+                                isNsfwUnlocked: _isNsfwUnlocked), // 2 - TV Shows
                             const SettingsScreen(), // 3 - Settings
                             NowPlayingScreen(
                                 onBack: _navigateBack), // 4 - Now Playing
@@ -354,7 +383,11 @@ class _MainShellState extends State<MainShell> {
                             const IptvLiveScreen(), // 6 - Live TV
                             const IptvMoviesScreen(), // 7 - Movies (IPTV)
                             const IptvSeriesScreen(), // 8 - TV Shows (IPTV)
-                            const MusicSearchPage(), // 9 - Music Library
+                            LibraryScreen(
+                              onPlayMedia: _navigateToNowPlaying,
+                              initialSection: LibrarySection.music,
+                              isNsfwUnlocked: _isNsfwUnlocked,
+                            ), // 9 - Music Library
                             const UserManagementScreen(), // 10 - User Management
                             LibraryScreen(
                               // 11 - NSFW
@@ -371,6 +404,7 @@ class _MainShellState extends State<MainShell> {
                               type: DocumentLibraryType.comics,
                             ), // 14 - Comics
                             const DownloadsScreen(), // 15 - Downloads
+                            const YouTubeScreen(),   // 16 - YouTube
                           ],
                         ),
                       ),
@@ -381,32 +415,9 @@ class _MainShellState extends State<MainShell> {
               ],
             ),
           ),
-          if (_showQueue)
-            Positioned.fill(
-              child: GestureDetector(
-                onTap: () => setState(() => _showQueue = false),
-                child: Container(color: Colors.black.withValues(alpha: 0.35)),
-              ),
-            ),
-          if (_showQueue)
-            Align(
-              alignment: Alignment.centerRight,
-              child: QueueDrawer(onPlayMedia: _navigateToNowPlaying),
-            ),
           // Picture-in-Picture overlay (always on top)
           const IptvPipOverlay(),
           _buildPairingOverlay(context),
-          Positioned(
-            right: 24,
-            bottom: 124,
-            child: FloatingActionButton.small(
-              heroTag: 'queue-drawer',
-              backgroundColor: const Color(0xFF1E1E22),
-              foregroundColor: const Color(0xFFAAC7FF),
-              onPressed: () => setState(() => _showQueue = !_showQueue),
-              child: const Icon(Icons.queue_music_rounded),
-            ),
-          ),
         ],
       ),
     );
@@ -430,6 +441,8 @@ class _MainShellState extends State<MainShell> {
         return 'Not Safe for Work';
       case 8:
         return 'Settings';
+      case 9:
+        return 'YouTube';
       default:
         return 'Library';
     }
@@ -455,10 +468,16 @@ class _MainShellState extends State<MainShell> {
               ),
             ),
             _MobileDrawerItem(
-              icon: Icons.folder_rounded,
-              label: 'Library',
+              icon: Icons.movie_rounded,
+              label: 'Movies',
               selected: _selectedNavIndex == 0,
               onTap: () => _selectMobileDrawerItem(context, 0),
+            ),
+            _MobileDrawerItem(
+              icon: Icons.tv_rounded,
+              label: 'TV Shows',
+              selected: _selectedNavIndex == 10,
+              onTap: () => _selectMobileDrawerItem(context, 10),
             ),
             _MobileDrawerItem(
               icon: Icons.music_note_rounded,
@@ -484,11 +503,24 @@ class _MainShellState extends State<MainShell> {
               selected: _selectedNavIndex == 4,
               onTap: () => _selectMobileDrawerItem(context, 4),
             ),
+            const Divider(color: Colors.white10, height: 24, indent: 20, endIndent: 20),
             _MobileDrawerItem(
               icon: Icons.live_tv_rounded,
-              label: 'IPTV',
+              label: 'Live TV',
               selected: _selectedNavIndex == 5,
               onTap: () => _selectMobileDrawerItem(context, 5),
+            ),
+            _MobileDrawerItem(
+              icon: Icons.movie_filter_rounded,
+              label: 'IPTV Movies',
+              selected: _selectedNavIndex == 11,
+              onTap: () => _selectMobileDrawerItem(context, 11),
+            ),
+            _MobileDrawerItem(
+              icon: Icons.video_library_rounded,
+              label: 'IPTV Series',
+              selected: _selectedNavIndex == 12,
+              onTap: () => _selectMobileDrawerItem(context, 12),
             ),
             _MobileDrawerItem(
               icon: Icons.play_circle_outline_rounded,
@@ -513,6 +545,12 @@ class _MainShellState extends State<MainShell> {
                   _showNsfwPinDialog();
                 },
               ),
+            _MobileDrawerItem(
+              icon: Icons.smart_display_rounded,
+              label: 'YouTube',
+              selected: _selectedNavIndex == 9,
+              onTap: () => _selectMobileDrawerItem(context, 9),
+            ),
             _MobileDrawerItem(
               icon: Icons.settings_rounded,
               label: 'Settings',
@@ -597,15 +635,22 @@ class _MainShellState extends State<MainShell> {
     return IndexedStack(
       index: _selectedNavIndex,
       children: [
-        RemoteLibraryScreen(onPlayMedia: _navigateToNowPlaying), // 0: Library
-        const MusicSearchPage(), // 1: Music
+        RemoteLibraryScreen(
+          initialSection: RemoteLibrarySection.movies,
+          showTabs: false,
+          onPlayMedia: _navigateToNowPlaying,
+        ), // 0: Movies
+        RemoteLibraryScreen(
+          initialSection: RemoteLibrarySection.music,
+          onPlayMedia: _navigateToNowPlaying,
+        ), // 1: Music
         DocumentLibraryScreen(
             type: DocumentLibraryType.ebooks), // 2: E-books
         DocumentLibraryScreen(
             type: DocumentLibraryType.manga), // 3: Manga
         DocumentLibraryScreen(
             type: DocumentLibraryType.comics), // 4: Comics
-        const IptvRemoteScreen(), // 5: IPTV
+        const IptvRemoteScreen(initialTabIndex: 0), // 5: Live TV (Guide)
         RemoteNowPlayingScreen(onBack: _navigateBack), // 6: Now Playing
         RemoteLibraryScreen(
           // 7: NSFW
@@ -613,6 +658,14 @@ class _MainShellState extends State<MainShell> {
           onPlayMedia: _navigateToNowPlaying,
         ),
         const SettingsScreen(), // 8: Settings
+        const YouTubeScreen(),  // 9: YouTube
+        RemoteLibraryScreen(
+          initialSection: RemoteLibrarySection.tv,
+          showTabs: false,
+          onPlayMedia: _navigateToNowPlaying,
+        ), // 10: TV Shows
+        const IptvRemoteScreen(initialTabIndex: 2), // 11: IPTV Movies
+        const IptvRemoteScreen(initialTabIndex: 3), // 12: IPTV Series
       ],
     );
   }
@@ -620,17 +673,26 @@ class _MainShellState extends State<MainShell> {
   Widget _buildPage() {
     switch (_selectedNavIndex) {
       case 0: // Home
-        return LibraryScreen(onPlayMedia: _navigateToNowPlaying);
+        return LibraryScreen(
+          onPlayMedia: _navigateToNowPlaying,
+          isNsfwUnlocked: _isNsfwUnlocked,
+        );
       case 1: // Web Browser
         return const WebBrowserScreen();
       case 2: // Library (same as home for now)
-        return LibraryScreen(onPlayMedia: _navigateToNowPlaying);
+        return LibraryScreen(
+          onPlayMedia: _navigateToNowPlaying,
+          isNsfwUnlocked: _isNsfwUnlocked,
+        );
       case 3: // Settings
         return const SettingsScreen();
       case 4: // Now Playing
         return NowPlayingScreen(onBack: _navigateBack);
       default:
-        return LibraryScreen(onPlayMedia: _navigateToNowPlaying);
+        return LibraryScreen(
+          onPlayMedia: _navigateToNowPlaying,
+          isNsfwUnlocked: _isNsfwUnlocked,
+        );
     }
   }
 
@@ -868,24 +930,37 @@ class _AndroidTvRemoteShellState extends State<AndroidTvRemoteShell> {
                         index: _selectedIndex,
                         children: [
                           RemoteLibraryScreen(
-                            onPlayMedia: () => _select(5),
-                          ),
+                            initialSection: RemoteLibrarySection.movies,
+                            showTabs: false,
+                            onPlayMedia: () => _select(9),
+                          ), // 0: Movies
+                          RemoteLibraryScreen(
+                            initialSection: RemoteLibrarySection.tv,
+                            showTabs: false,
+                            onPlayMedia: () => _select(9),
+                          ), // 1: TV Shows
+                          RemoteLibraryScreen(
+                            initialSection: RemoteLibrarySection.music,
+                            onPlayMedia: () => _select(9),
+                          ), // 2: Music
                           DocumentLibraryScreen(
                             type: DocumentLibraryType.ebooks,
-                          ),
+                          ), // 3
                           DocumentLibraryScreen(
                             type: DocumentLibraryType.manga,
-                          ),
+                          ), // 4
                           DocumentLibraryScreen(
                             type: DocumentLibraryType.comics,
-                          ),
-                          const IptvRemoteScreen(),
-                          RemoteNowPlayingScreen(onBack: () => _select(0)),
+                          ), // 5
+                          const IptvRemoteScreen(initialTabIndex: 0), // 6: Live TV
+                          const IptvRemoteScreen(initialTabIndex: 2), // 7: IPTV Movies
+                          const IptvRemoteScreen(initialTabIndex: 3), // 8: IPTV Series
+                          RemoteNowPlayingScreen(onBack: () => _select(0)), // 9
                           RemoteLibraryScreen(
                             initialSection: RemoteLibrarySection.nsfw,
-                            onPlayMedia: () => _select(5),
-                          ),
-                          const SettingsScreen(),
+                            onPlayMedia: () => _select(9),
+                          ), // 10
+                          const SettingsScreen(), // 11
                         ],
                       ),
                     ),
@@ -921,60 +996,90 @@ class _AndroidTvNav extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 10),
         children: [
           _AndroidTvNavItem(
-            icon: Icons.folder_rounded,
-            label: 'Library',
+            icon: Icons.movie_rounded,
+            label: 'Movies',
             selected: selectedIndex == 0,
             expanded: expanded,
             onTap: () => onSelected(0),
           ),
           _AndroidTvNavItem(
-            icon: Icons.menu_book_rounded,
-            label: 'E-books',
+            icon: Icons.tv_rounded,
+            label: 'TV Shows',
             selected: selectedIndex == 1,
             expanded: expanded,
             onTap: () => onSelected(1),
           ),
           _AndroidTvNavItem(
-            icon: Icons.auto_stories_rounded,
-            label: 'Manga',
+            icon: Icons.music_note_rounded,
+            label: 'Music',
             selected: selectedIndex == 2,
             expanded: expanded,
             onTap: () => onSelected(2),
           ),
           _AndroidTvNavItem(
-            icon: Icons.collections_bookmark_rounded,
-            label: 'Comics',
+            icon: Icons.menu_book_rounded,
+            label: 'E-books',
             selected: selectedIndex == 3,
             expanded: expanded,
             onTap: () => onSelected(3),
           ),
           _AndroidTvNavItem(
-            icon: Icons.live_tv_rounded,
-            label: 'IPTV',
+            icon: Icons.auto_stories_rounded,
+            label: 'Manga',
             selected: selectedIndex == 4,
             expanded: expanded,
             onTap: () => onSelected(4),
           ),
           _AndroidTvNavItem(
-            icon: Icons.play_circle_outline_rounded,
-            label: 'Playing',
+            icon: Icons.collections_bookmark_rounded,
+            label: 'Comics',
             selected: selectedIndex == 5,
             expanded: expanded,
             onTap: () => onSelected(5),
           ),
+          const Divider(color: Colors.white10, height: 16),
           _AndroidTvNavItem(
-            icon: nsfwUnlocked ? Icons.lock_open_rounded : Icons.lock_rounded,
-            label: nsfwUnlocked ? 'NSFW' : 'Unlock NSFW',
+            icon: Icons.live_tv_rounded,
+            label: 'Live TV',
             selected: selectedIndex == 6,
             expanded: expanded,
             onTap: () => onSelected(6),
           ),
           _AndroidTvNavItem(
-            icon: Icons.settings_rounded,
-            label: 'Settings',
+            icon: Icons.movie_filter_rounded,
+            label: 'IPTV Movies',
             selected: selectedIndex == 7,
             expanded: expanded,
             onTap: () => onSelected(7),
+          ),
+          _AndroidTvNavItem(
+            icon: Icons.video_library_rounded,
+            label: 'IPTV Series',
+            selected: selectedIndex == 8,
+            expanded: expanded,
+            onTap: () => onSelected(8),
+          ),
+          const Divider(color: Colors.white10, height: 16),
+          _AndroidTvNavItem(
+            icon: Icons.play_circle_outline_rounded,
+            label: 'Playing',
+            selected: selectedIndex == 9,
+            expanded: expanded,
+            onTap: () => onSelected(9),
+          ),
+          _AndroidTvNavItem(
+            icon: nsfwUnlocked ? Icons.lock_open_rounded : Icons.lock_rounded,
+            label: nsfwUnlocked ? 'NSFW' : 'Unlock NSFW',
+            selected: selectedIndex == 10,
+            expanded: expanded,
+            onTap: () => onSelected(10),
+          ),
+          _AndroidTvNavItem(
+            icon: Icons.settings_rounded,
+            label: 'Settings',
+            selected: selectedIndex == 11,
+            expanded: expanded,
+            onTap: () => onSelected(11),
           ),
         ],
       ),

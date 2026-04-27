@@ -95,6 +95,15 @@ class PlatformChannelService {
     }
   }
 
+  /// Enter Picture-in-Picture mode
+  Future<void> enterPipMode() async {
+    try {
+      await _channel.invokeMethod('enterPipMode');
+    } on PlatformException catch (e) {
+      print('Failed to enter PiP mode: ${e.message}');
+    }
+  }
+
   /// Listen for audio chunks from native layer (for live transcription)
   Stream<Map<String, dynamic>> get audioChunkStream {
     _audioChunkStream ??= _audioChunkChannel

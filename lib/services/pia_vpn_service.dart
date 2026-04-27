@@ -60,6 +60,33 @@ class PiaVpnService {
     }
   }
 
+  /// Returns the current PIA connection state string, e.g. "Connected", "Disconnected".
+  Future<String> getConnectionState() async {
+    if (!Platform.isWindows) return 'Unavailable';
+    if (!await isInstalled()) return 'Not installed';
+    try {
+      final result = await Process.run(_piactlPath, ['get', 'connectionstate'],
+          runInShell: true);
+      return (result.stdout as String).trim();
+    } catch (_) {
+      return 'Unknown';
+    }
+  }
+
+  /// Returns the current VPN IP assigned by PIA, or null if not connected.
+  Future<String?> getVpnIp() async {
+    if (!Platform.isWindows) return null;
+    if (!await isInstalled()) return null;
+    try {
+      final result = await Process.run(_piactlPath, ['get', 'vpnip'],
+          runInShell: true);
+      final ip = (result.stdout as String).trim();
+      return ip.isNotEmpty ? ip : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Disconnect from the VPN
   Future<void> disconnect() async {
     if (!Platform.isWindows) return;

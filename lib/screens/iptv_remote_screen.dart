@@ -7,14 +7,21 @@ import 'iptv_player_screen.dart';
 import '../services/iptv_service.dart';
 
 class IptvRemoteScreen extends StatefulWidget {
-  const IptvRemoteScreen({super.key});
+  final int initialTabIndex;
+  const IptvRemoteScreen({super.key, this.initialTabIndex = 0});
 
   @override
   State<IptvRemoteScreen> createState() => _IptvRemoteScreenState();
 }
 
 class _IptvRemoteScreenState extends State<IptvRemoteScreen> {
-  int _selectedTabIndex = 0; // 0: Guide, 1: Live, 2: Movies, 3: TV Shows
+  late int _selectedTabIndex;
+  
+  @override
+  void initState() {
+    super.initState();
+    _selectedTabIndex = widget.initialTabIndex;
+  }
 
   @override
   Widget build(BuildContext context) {

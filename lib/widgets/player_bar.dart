@@ -14,7 +14,10 @@ class PlayerBar extends StatelessWidget {
     return Consumer2<MediaProvider, SubtitleProvider>(
       builder: (context, mediaProvider, subtitleProvider, _) {
         final media = mediaProvider.currentMedia;
-        if (media == null) return const SizedBox.shrink();
+        // Audio playback uses _MusicPlayerBar in the library screen instead
+        if (media == null || media.mediaKind == MediaKind.audio) {
+          return const SizedBox.shrink();
+        }
 
         return Padding(
           padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),

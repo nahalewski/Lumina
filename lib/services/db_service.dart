@@ -21,13 +21,26 @@ class DBService {
 
     return await openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: _createDB,
+      onUpgrade: _onUpgrade,
     );
   }
 
+  Future _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await _createLibraryTables(db);
+    }
+  }
+
   Future _createDB(Database db, int version) async {
-    // Tracks table
+    await _createMusicTables(db);
+    if (version >= 2) {
+      await _createLibraryTables(db);
+    }
+  }
+
+  Future _createMusicTables(Database db) async {
     await db.execute('''
       CREATE TABLE music_tracks (
         id TEXT PRIMARY KEY,
@@ -119,6 +132,58 @@ class DBService {
         status TEXT NOT NULL,
         last_run TEXT,
         error TEXT
+      )
+    ''');
+  }
+
+  Future _createLibraryTables(Database db) async {
+    await db.execute('''
+      CREATE TABLE media_library (
+        id TEXT PRIMARY KEY,
+        file_path TEXT,
+        file_name TEXT,
+        thumbnail_path TEXT,
+        duration INTEGER,
+        added_at TEXT,
+        updated_at TEXT,
+        is_favorite INTEGER,
+        content_type INTEGER,
+        media_kind INTEGER,
+        is_watched INTEGER,
+        play_count INTEGER,
+        resolution TEXT,
+        language TEXT,
+        metadata_id TEXT,
+        movie_title TEXT,
+        show_title TEXT,
+        episode_title TEXT,
+        synopsis TEXT,
+        poster_url TEXT,
+        backdrop_url TEXT,
+        thumbnail_url TEXT,
+        season_poster_url TEXT,
+        trailer_url TEXT,
+        release_date TEXT,
+        release_year INTEGER,
+        rating REAL,
+        genres TEXT,
+        cast_list TEXT,
+        directors TEXT,
+        writers TEXT,
+        artist TEXT,
+        album TEXT,
+        track_number INTEGER,
+        watch_progress REAL,
+        last_played TEXT,
+        is_deleted INTEGER DEFAULT 0
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE sync_status (
+        key TEXT PRIMARY KEY,
+        value TEXT,
+        updated_at TEXT
       )
     ''');
   }

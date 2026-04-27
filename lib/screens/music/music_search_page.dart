@@ -10,7 +10,8 @@ import 'music_details_page.dart';
 import 'dart:ui';
 
 class MusicSearchPage extends StatefulWidget {
-  const MusicSearchPage({super.key});
+  final VoidCallback? onPlayMedia;
+  const MusicSearchPage({super.key, this.onPlayMedia});
 
   @override
   State<MusicSearchPage> createState() => _MusicSearchPageState();
@@ -47,7 +48,7 @@ class _MusicSearchPageState extends State<MusicSearchPage> {
           Expanded(
             child: musicProvider.isSearching
                 ? const Center(child: CircularProgressIndicator())
-                : _buildResults(musicProvider, mediaProvider),
+                : _buildResults(musicProvider, mediaProvider, widget.onPlayMedia),
           ),
         ],
       ),
@@ -60,13 +61,26 @@ class _MusicSearchPageState extends State<MusicSearchPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Search',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 32,
-              fontWeight: FontWeight.bold,
-            ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Music Library',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 32,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.sync_rounded, color: Colors.white),
+                onPressed: () {
+                  final mediaProvider = Provider.of<MediaProvider>(context, listen: false);
+                  mediaProvider.scanAllFolders();
+                },
+                tooltip: 'Refresh Library',
+              ),
+            ],
           ),
           const SizedBox(height: 24),
           TextField(
@@ -92,7 +106,7 @@ class _MusicSearchPageState extends State<MusicSearchPage> {
                 borderRadius: BorderRadius.circular(30),
                 borderSide: BorderSide.none,
               ),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
             ),
           ),
         ],
@@ -100,30 +114,115 @@ class _MusicSearchPageState extends State<MusicSearchPage> {
     );
   }
 
-  Widget _buildResults(MusicProvider musicProvider, MediaProvider mediaProvider) {
-    final results = musicProvider.searchResults;
-    if (musicProvider.isSearching) {
-      return const Center(
-        child: CircularProgressIndicator(color: Color(0xFF1DB954)),
-      );
+  Widget _buildResults(MusicProvider provider, MediaProvider mediaProvider, VoidCallback? onPlayMedia) {
+    if (provider.searchResults.isEmpty) {
+      return _buildEmptyState();
     }
 
-    if (results.isEmpty) {
-      return const Center(
-        child: Text(
-          'Browse your favorite music',
-          style: TextStyle(color: Colors.white38),
-        ),
-      );
-    }
+    return _Results(
+      results: provider.searchResults,
+      mediaProvider: mediaProvider,
+      musicProvider: provider,
+      onPlayMedia: onPlayMedia,
+    );
+  }
 
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      itemCount: results.length,
-      itemBuilder: (context, index) {
-        final track = results[index];
-        return _TrackTile(track: track, mediaProvider: mediaProvider, musicProvider: musicProvider);
-      },
+  Widget _buildEmptyState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.music_note_rounded,
+            size: 80,
+            color: Colors.white.withValues(alpha: 0.1),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'Discover something new',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.3),
+              fontSize: 16,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Results extends StatelessWidget {
+  final MusicSearchResults results;
+  final MediaProvider mediaProvider;
+  final MusicProvider musicProvider;
+  final VoidCallback? onPlayMedia;
+
+  const _Results({
+    required this.results,
+    required this.mediaProvider,
+    required this.musicProvider,
+    this.onPlayMedia,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      children: [
+        if (results.albums.isNotEmpty) ...[
+          const Text('Albums', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 200,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              itemCount: results.albums.length,
+              itemBuilder: (context, index) {
+                return _AlbumCard(
+                  album: results.albums[index],
+                  onPlayMedia: onPlayMedia,
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 32),
+        ],
+        if (results.artists.isNotEmpty) ...[
+          const Text('Artists', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 120,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              itemCount: results.artists.length,
+              itemBuilder: (context, index) {
+                return _ArtistCard(
+                  artist: results.artists[index],
+                  onPlayMedia: onPlayMedia,
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 32),
+        ],
+        if (results.tracks.isNotEmpty) ...[
+          const Text('Songs', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 16),
+          ListView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: results.tracks.length,
+            itemBuilder: (context, index) {
+              return _TrackTile(
+                track: results.tracks[index],
+                mediaProvider: mediaProvider,
+                musicProvider: musicProvider,
+                onPlayMedia: onPlayMedia,
+              );
+            },
+          ),
+        ],
+      ],
     );
   }
 }
@@ -132,11 +231,13 @@ class _TrackTile extends StatelessWidget {
   final MusicTrack track;
   final MediaProvider mediaProvider;
   final MusicProvider musicProvider;
+  final VoidCallback? onPlayMedia;
 
   const _TrackTile({
     required this.track,
     required this.mediaProvider,
     required this.musicProvider,
+    this.onPlayMedia,
   });
 
   @override
@@ -159,6 +260,7 @@ class _TrackTile extends StatelessWidget {
                     type: MusicDetailsType.album,
                     title: track.albumName ?? 'Album',
                     artworkUrl: track.albumArtworkUrl,
+                    onPlayMedia: onPlayMedia,
                   ),
                 ),
               );
@@ -170,155 +272,146 @@ class _TrackTile extends StatelessWidget {
                 borderRadius: BorderRadius.circular(4),
                 image: track.albumArtworkUrl != null
                     ? DecorationImage(
-                        image: NetworkImage(track.albumArtworkUrl!),
+                        image: CachedNetworkImageProvider(track.albumArtworkUrl!),
                         fit: BoxFit.cover,
                       )
                     : null,
                 color: Colors.white10,
               ),
-              child: (track.albumArtworkUrl != null && track.albumArtworkUrl!.isNotEmpty)
-                  ? ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: CachedNetworkImage(
-                        imageUrl: track.albumArtworkUrl!,
-                        fit: BoxFit.cover,
-                        placeholder: (context, url) => Container(color: Colors.white.withOpacity(0.05)),
-                        errorWidget: (context, url, error) => 
-                            const Icon(Icons.music_note_rounded, color: Colors.white24),
-                        fadeInDuration: const Duration(milliseconds: 300),
-                      ),
-                    )
-                  : const Icon(Icons.music_note_rounded, color: Colors.white24),
+              child: track.albumArtworkUrl == null
+                  ? const Icon(Icons.music_note_rounded, color: Colors.white24)
+                  : null,
             ),
           ),
-          title: Text(
-            track.title,
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          subtitle: Row(
-            children: [
-              if (isAvailable)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                  margin: const EdgeInsets.only(right: 6),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1DB954),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                  child: const Text(
-                    'LY',
-                    style: TextStyle(color: Colors.black, fontSize: 8, fontWeight: FontWeight.bold),
+          title: Text(track.title, style: TextStyle(color: isAvailable ? Colors.white : Colors.white38, fontWeight: FontWeight.bold)),
+          subtitle: InkWell(
+            onTap: track.artistId != null ? () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => MusicDetailsPage(
+                    id: track.artistId!,
+                    type: MusicDetailsType.artist,
+                    title: track.artistName ?? 'Artist',
+                    onPlayMedia: onPlayMedia,
                   ),
                 ),
-              Expanded(
-                child: InkWell(
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => MusicDetailsPage(
-                          id: track.artistId,
-                          type: MusicDetailsType.artist,
-                          title: track.artistName,
-                          artworkUrl: null, // Artist image will be loaded in details
-                        ),
-                      ),
-                    );
-                  },
-                  child: Text(
-                    '${track.artistName} • ${track.albumName ?? 'Single'}',
-                    style: const TextStyle(color: Colors.white54, fontSize: 13),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ),
-            ],
+              );
+            } : null,
+            child: Text(track.artistName ?? 'Unknown Artist', style: const TextStyle(color: Colors.white38, fontSize: 12)),
           ),
           trailing: isAvailable
-              ? const Icon(Icons.play_circle_fill_rounded, color: Color(0xFF1DB954))
-              : const Icon(Icons.info_outline_rounded, color: Colors.white24),
-          onTap: () {
-            if (isAvailable) {
-              final file = MediaFile(
-                id: track.id,
-                filePath: match.localFilePath!,
-                fileName: track.title,
-                mediaKind: MediaKind.audio,
-                artist: track.artistName,
-                album: track.albumName,
-                metadataTitle: track.title,
-                thumbnailUrl: track.albumArtworkUrl,
-              );
-              mediaProvider.playMedia(file);
-              musicProvider.notifyListeners();
-            } else {
-              _showDownloadDialog(context);
-            }
-          },
+              ? const Icon(Icons.play_circle_fill_rounded, color: Color(0xFFAAC7FF))
+              : const Icon(Icons.cloud_download_rounded, color: Colors.white12),
+          onTap: isAvailable ? () {
+            final file = mediaProvider.mediaFiles.firstWhere(
+              (f) => f.filePath == match!.localFilePath,
+            );
+            mediaProvider.playMedia(file);
+            onPlayMedia?.call();
+          } : null,
         );
       },
     );
   }
+}
 
-  void _showDownloadDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        backgroundColor: const Color(0xFF1E1E22),
-        title: const Text('Download track?', style: TextStyle(color: Colors.white)),
-        content: Text(
-          'Download "${track.title}" by ${track.artistName}?',
-          style: const TextStyle(color: Colors.white70),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('CANCEL'),
-          ),
-          ElevatedButton.icon(
-            onPressed: () {
-              Navigator.pop(dialogContext);
-              _downloadTrack(context);
-            },
-            icon: const Icon(Icons.download_rounded, size: 16),
-            label: const Text('DOWNLOAD'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF0A84FF),
-              foregroundColor: Colors.white,
+class _AlbumCard extends StatelessWidget {
+  final MusicAlbum album;
+  final VoidCallback? onPlayMedia;
+  const _AlbumCard({required this.album, this.onPlayMedia});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => MusicDetailsPage(
+              id: album.id,
+              type: MusicDetailsType.album,
+              title: album.name,
+              artworkUrl: album.artworkUrl,
+              onPlayMedia: onPlayMedia,
             ),
           ),
-        ],
+        );
+      },
+      child: Container(
+        width: 140,
+        margin: const EdgeInsets.only(right: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: AspectRatio(
+                aspectRatio: 1,
+                child: album.artworkUrl != null
+                    ? CachedNetworkImage(
+                        imageUrl: album.artworkUrl!,
+                        fit: BoxFit.cover,
+                        placeholder: (context, url) => Container(color: Colors.white10),
+                      )
+                    : Container(color: Colors.white10, child: const Icon(Icons.album_rounded, color: Colors.white24)),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(album.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+            Text(album.artistName ?? '', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white38, fontSize: 12)),
+          ],
+        ),
       ),
     );
   }
+}
 
-  Future<void> _downloadTrack(BuildContext context) async {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Downloading "${track.title}"...')),
-    );
-    final query = '${track.title} ${track.artistName}';
-    final ytResults = await mediaProvider.searchYoutubeDiscovery('$query music');
-    MediaFile? file;
-    if (ytResults.isNotEmpty) {
-      file = await mediaProvider.downloadAndAddMusic(ytResults.first, artworkUrl: track.albumArtworkUrl);
-    } else {
-      file = await mediaProvider.downloadAndAddMusic(
-        {'title': track.title, 'url': 'ytsearch:$query'},
-        artworkUrl: track.albumArtworkUrl,
-      );
-    }
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(file != null
-              ? 'Downloaded "${file.displayTitle}" to Music Library'
-              : 'Download failed — try again'),
-          backgroundColor: file != null ? const Color(0xFF0A84FF) : Colors.red,
+class _ArtistCard extends StatelessWidget {
+  final MusicArtist artist;
+  final VoidCallback? onPlayMedia;
+  const _ArtistCard({required this.artist, this.onPlayMedia});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => MusicDetailsPage(
+              id: artist.id,
+              type: MusicDetailsType.artist,
+              title: artist.name,
+              artworkUrl: artist.imageUrl,
+              onPlayMedia: onPlayMedia,
+            ),
+          ),
+        );
+      },
+      child: Container(
+        width: 100,
+        margin: const EdgeInsets.only(right: 16),
+        child: Column(
+          children: [
+            ClipOval(
+              child: SizedBox(
+                width: 80,
+                height: 80,
+                child: artist.imageUrl != null
+                    ? CachedNetworkImage(
+                        imageUrl: artist.imageUrl!,
+                        fit: BoxFit.cover,
+                        placeholder: (context, url) => Container(color: Colors.white10),
+                      )
+                    : Container(color: Colors.white10, child: const Icon(Icons.person_rounded, color: Colors.white24)),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(artist.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontSize: 12)),
+          ],
         ),
-      );
-    }
+      ),
+    );
   }
 }

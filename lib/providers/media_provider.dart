@@ -28,6 +28,12 @@ import '../services/cache_service.dart';
 import '../services/user_account_service.dart';
 import '../services/pia_vpn_service.dart';
 import '../services/ebook_manga_metadata_service.dart';
+import '../services/sync_service.dart';
+import '../services/db_service.dart';
+import 'package:sqflite/sqflite.dart';
+import 'package:lumina_media/services/download_service.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:watcher/watcher.dart';
 
 /// Sort options for the library
 enum LibrarySort {
@@ -46,13 +52,14 @@ enum LibrarySort {
 enum LibraryFilter {
   all,
   favorites,
-  watched,
-  unwatched,
-  processed,
-  unprocessed,
+  unplayed,
+  inProgress,
+  recent,
+  fourK,
+  noArtwork,
+  noMetadata,
   anime,
   hentai,
-  general,
 }
 
 /// Manages the media library state
@@ -78,6 +85,7 @@ class MediaProvider extends ChangeNotifier {
   Timer? _saveDebounce; // BUG-03: debounce library saves
   Timer? _searchDebounce;
   Timer? _storageScanTimer; // Periodic storage scan
+  final List<StreamSubscription> _watchers = [];
 
   // Track background processing for new library items
   final Map<String, String> _processingStatus = {};
@@ -99,6 +107,7 @@ class MediaProvider extends ChangeNotifier {
   final CacheService _cacheService = CacheService.instance;
   final UserAccountService userAccounts = UserAccountService();
   final PiaVpnService piaVpnService = PiaVpnService();
+  DownloadService? _downloadService;
 
   // ─── Media Server (Remote Access) ─────────────────────────────────────
 
@@ -126,6 +135,7 @@ class MediaProvider extends ChangeNotifier {
     );
     mediaServer.updateLibrary(_mediaFiles);
     await mediaServer.start(port: port);
+    mediaServer.getUpdateFolder().ignore(); // eagerly resolve folder path for UI
     if (_settings.enableRemoteTunnel) {
       await cloudflareTunnel.start();
     }
@@ -190,12 +200,18 @@ class MediaProvider extends ChangeNotifier {
   Future<void> startRemoteTunnel() async {
     _settings.enableRemoteTunnel = true;
     await _saveSettings();
-    if (!isMediaServerRunning) {
-      await startMediaServer();
-    } else {
-      await cloudflareTunnel.start();
-      notifyListeners();
+    try {
+      if (!isMediaServerRunning) {
+        await startMediaServer();
+      } else {
+        await cloudflareTunnel.start();
+      }
+    } catch (e) {
+      debugPrint('[MediaProvider] startRemoteTunnel error: $e');
+      _settings.enableRemoteTunnel = false;
+      await _saveSettings();
     }
+    notifyListeners();
   }
 
   Future<void> stopRemoteTunnel() async {
@@ -203,6 +219,28 @@ class MediaProvider extends ChangeNotifier {
     await _saveSettings();
     await cloudflareTunnel.stop();
     notifyListeners();
+  }
+
+  Future<void> syncLibrary() async {
+    if (!Platform.isAndroid) return;
+    
+    final serverUrl = mediaServerRemoteUrl.isNotEmpty 
+        ? mediaServerRemoteUrl 
+        : mediaServerLocalUrl;
+        
+    if (serverUrl.isEmpty) return;
+    
+    final packageInfo = await PackageInfo.fromPlatform();
+    final deviceId = packageInfo.packageName + (Platform.isAndroid ? '_android' : '_ios');
+
+    await SyncService.instance.performSync(
+      serverUrl: serverUrl,
+      token: _settings.mediaServerToken,
+      deviceId: deviceId,
+    );
+    
+    // Reload library after sync
+    await loadLibrary();
   }
 
   void toggleAutoStartServer(bool value) {
@@ -228,6 +266,7 @@ class MediaProvider extends ChangeNotifier {
   String? get mediaServerError => mediaServer.lastError.value;
   List<String> get mediaServerLogs => mediaServer.logs.value;
   String get mediaServerToken => _settings.mediaServerToken;
+  String get mediaServerUpdateFolder => mediaServer.updateFolderPath.value;
   bool get enablePiaVpn => _settings.enablePiaVpn;
 
   void togglePiaVpn(bool value) {
@@ -366,6 +405,10 @@ class MediaProvider extends ChangeNotifier {
     mediaServer.setMusicDownloadCallback((ytResult) async {
       await downloadAndAddMusic(ytResult);
     });
+  }
+
+  void setDownloadService(DownloadService downloadService) {
+    _downloadService = downloadService;
   }
 
   // ─── Smart Filters (#10) ──────────────────────────────────────────────
@@ -574,12 +617,29 @@ class MediaProvider extends ChangeNotifier {
     }
 
     final spotifyArtwork = _spotifyArtworkUrl(spotifyMetadata);
+    
+    // Register task in Downloads tab
+    final taskId = '${DateTime.now().millisecondsSinceEpoch}_music';
+    if (_downloadService != null) {
+      _downloadService!.addManualTask(DownloadTask(
+        id: taskId,
+        url: ytResult['url']!,
+        fileName: ytResult['title'] ?? 'Music Download',
+        savePath: saveDir,
+        status: DownloadStatus.downloading,
+      ));
+    }
+
     final filePath = await _ytdlpService.downloadMusic(
       ytResult['url']!,
       saveDir,
       spotifyMetadata: spotifyMetadata,
     );
+    
     if (filePath != null) {
+      if (_downloadService != null) {
+        _downloadService!.updateTask(taskId, status: DownloadStatus.completed, progress: 1.0);
+      }
       final fileName = p.basename(filePath);
       return await _addMediaFile(
         filePath,
@@ -588,6 +648,10 @@ class MediaProvider extends ChangeNotifier {
         spotifyMetadata: spotifyMetadata,
         mediaKind: MediaKind.audio,
       );
+    }
+    
+    if (_downloadService != null) {
+      _downloadService!.updateTask(taskId, status: DownloadStatus.failed, errorMessage: 'Download failed');
     }
     return null;
   }
@@ -728,47 +792,41 @@ class MediaProvider extends ChangeNotifier {
     var videos = _mediaFiles;
 
     // Apply filter
+    final thirtyDaysAgo = DateTime.now().subtract(const Duration(days: 30));
     switch (_currentFilter) {
       case LibraryFilter.all:
         break;
       case LibraryFilter.favorites:
         videos = videos.where((m) => m.isFavorite).toList();
         break;
-      case LibraryFilter.watched:
-        videos = videos.where((m) => m.isWatched).toList();
+      case LibraryFilter.unplayed:
+        videos = videos.where((m) => !m.isWatched && m.watchProgress < 0.01).toList();
         break;
-      case LibraryFilter.unwatched:
-        videos = videos.where((m) => !m.isWatched).toList();
+      case LibraryFilter.inProgress:
+        videos = videos.where((m) => m.watchProgress > 0.01 && m.watchProgress < 0.90).toList();
         break;
-      case LibraryFilter.processed:
-        videos = videos
-            .where(
-              (m) =>
-                  _processingStatus[m.filePath] == 'Done' ||
-                  _processingStatus[m.filePath] == 'Done (cached SRT)',
-            )
-            .toList();
+      case LibraryFilter.recent:
+        videos = videos.where((m) => m.addedAt.isAfter(thirtyDaysAgo)).toList();
         break;
-      case LibraryFilter.unprocessed:
-        videos = videos
-            .where(
-              (m) =>
-                  _processingStatus[m.filePath] == null ||
-                  _processingStatus[m.filePath] == 'Error',
-            )
-            .toList();
+      case LibraryFilter.fourK:
+        videos = videos.where((m) {
+          final r = m.resolution?.toLowerCase() ?? '';
+          return r.contains('4k') || r.contains('2160') || r.contains('uhd');
+        }).toList();
+        break;
+      case LibraryFilter.noArtwork:
+        videos = videos.where((m) => m.posterUrl == null && m.coverArtUrl == null).toList();
+        break;
+      case LibraryFilter.noMetadata:
+        videos = videos.where((m) => m.isAudio
+            ? (m.artist == null || m.album == null)
+            : (m.synopsis == null && m.description == null)).toList();
         break;
       case LibraryFilter.anime:
-        videos =
-            videos.where((m) => m.contentType == ContentType.anime).toList();
+        videos = videos.where((m) => m.contentType == ContentType.anime).toList();
         break;
       case LibraryFilter.hentai:
-        videos =
-            videos.where((m) => m.contentType == ContentType.adult).toList();
-        break;
-      case LibraryFilter.general:
-        videos =
-            videos.where((m) => m.contentType == ContentType.general).toList();
+        videos = videos.where((m) => m.contentType == ContentType.adult).toList();
         break;
     }
 
@@ -868,11 +926,60 @@ class MediaProvider extends ChangeNotifier {
   }
 
   Future<void> playNextInQueue() async {
-    if (_playbackQueue.isEmpty) return;
+    if (_playbackQueue.isEmpty) {
+      final next = findNextMedia(_currentMedia);
+      if (next != null) {
+        await playMedia(next);
+      }
+      return;
+    }
     final next = _playbackQueue.removeAt(0);
     notifyListeners();
     await playMedia(next);
   }
+
+  /// Find the logical "next" media for a given file (next episode/track)
+  MediaFile? findNextMedia(MediaFile? current) {
+    if (current == null) return null;
+
+    // 1. If it's a TV Show or Anime, look for next episode
+    if (current.mediaKind == MediaKind.tv || current.animeId != null) {
+      final siblings = _mediaFiles.where((m) => 
+        (m.showTitle != null && m.showTitle == current.showTitle) || 
+        (m.animeId != null && m.animeId == current.animeId)
+      ).toList();
+
+      // Sort by season then episode
+      siblings.sort((a, b) {
+        final sA = a.season ?? 1;
+        final sB = b.season ?? 1;
+        if (sA != sB) return sA.compareTo(sB);
+        return (a.episode ?? 0).compareTo(b.episode ?? 0);
+      });
+
+      final currentIndex = siblings.indexWhere((m) => m.id == current.id);
+      if (currentIndex != -1 && currentIndex < siblings.length - 1) {
+        return siblings[currentIndex + 1];
+      }
+    }
+
+    // 2. If it's music, look for next track in album
+    if (current.mediaKind == MediaKind.audio && current.album != null) {
+      final albumTracks = _mediaFiles.where((m) => 
+        m.mediaKind == MediaKind.audio && m.album == current.album
+      ).toList();
+
+      albumTracks.sort((a, b) => (a.trackNumber ?? 0).compareTo(b.trackNumber ?? 0));
+      
+      final currentIndex = albumTracks.indexWhere((m) => m.id == current.id);
+      if (currentIndex != -1 && currentIndex < albumTracks.length - 1) {
+        return albumTracks[currentIndex + 1];
+      }
+    }
+
+    return null;
+  }
+
 
   // ─── Library Folders Getters (#13) ────────────────────────────────────
   List<String> get libraryFolders => List.unmodifiable(_libraryFolders);
@@ -958,25 +1065,56 @@ class MediaProvider extends ChangeNotifier {
   }
 
   Future<void> _scanMusicFolder() async {
-    String? saveDir = _settings.musicSavePath;
-    if (saveDir == null) {
-      final appDir = await getApplicationDocumentsDirectory();
-      saveDir = '${appDir.path}/Music';
+    List<String> scanDirs = [];
+    
+    // 1. User-defined music save path
+    if (_settings.musicSavePath != null) {
+      scanDirs.add(_settings.musicSavePath!);
     }
-    final dir = Directory(saveDir);
-    if (await dir.exists()) {
-      await scanFolder(saveDir, mediaKind: MediaKind.audio);
+    
+    // 2. Default App Music folder
+    final appDir = await getApplicationDocumentsDirectory();
+    scanDirs.add(p.join(appDir.path, 'Music'));
+    
+    // 3. System Music folder
+    if (Platform.isWindows) {
+      final userProfile = Platform.environment['USERPROFILE'];
+      if (userProfile != null) {
+        scanDirs.add(p.join(userProfile, 'Music'));
+      }
+    } else if (Platform.isAndroid) {
+      // Common Android music path
+      scanDirs.add('/storage/emulated/0/Music');
+    }
+
+    for (final dirPath in scanDirs) {
+      final dir = Directory(dirPath);
+      if (await dir.exists()) {
+        debugPrint('MediaProvider: Scanning music folder: $dirPath');
+        await scanFolder(dirPath, mediaKind: MediaKind.audio);
+      }
     }
   }
 
   // Watch folders feature REMOVED
 
   void _startStorageScanTimer() {
-    // Watch folders feature REMOVED - automatic scanning is disabled
+    _storageScanTimer?.cancel();
+    _storageScanTimer = Timer.periodic(const Duration(minutes: 15), (timer) {
+      scanStorageFolders();
+    });
   }
 
   void _cancelStorageScanTimer() {
-    // Watch folders feature REMOVED
+    _storageScanTimer?.cancel();
+    _storageScanTimer = null;
+  }
+
+  bool get showThemeParticles => _settings.showThemeParticles;
+  void setShowThemeParticles(bool value) {
+    _settings.showThemeParticles = value;
+    _saveSettings();
+    notifyListeners();
   }
 
   @override
@@ -985,7 +1123,8 @@ class MediaProvider extends ChangeNotifier {
     _saveDebounce?.cancel();
     _searchDebounce?.cancel();
     _pairingSubscription?.cancel();
-    cloudflareTunnel.stop();
+    cloudflareTunnel.isRunning.removeListener(_onTunnelStateChanged);
+    cloudflareTunnel.dispose();
     mediaServer.stop();
     super.dispose();
   }
@@ -995,17 +1134,8 @@ class MediaProvider extends ChangeNotifier {
     if (!await dir.exists()) return;
 
     final supportedExtensions = [
-      '.mp4',
-      '.mkv',
-      '.mov',
-      '.avi',
-      '.webm',
-      '.mp3',
-      '.wav',
-      '.flac',
-      '.aac',
-      '.ogg',
-      '.m4a',
+      '.mp4', '.mkv', '.mov', '.avi', '.webm', '.wmv', '.flv', '.ts', '.m4v', '.3gp', '.mpg', '.mpeg', '.vob', // Video
+      '.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a', '.opus', '.wma', // Audio
     ];
 
     await for (final entity in dir.list(recursive: true)) {
@@ -1171,6 +1301,7 @@ class MediaProvider extends ChangeNotifier {
       filePath: filePath,
       fileName: fileName,
       mediaKind: mediaKind,
+      updatedAt: DateTime.now(),
     );
 
     _mediaFiles.add(mediaFile);
@@ -1191,8 +1322,8 @@ class MediaProvider extends ChangeNotifier {
 
       // If we have a specific artwork from Spotify (discovery), override
       final finalFile = artworkUrl != null
-          ? enriched.copyWith(posterUrl: artworkUrl, coverArtUrl: artworkUrl)
-          : enriched;
+          ? enriched.copyWith(posterUrl: artworkUrl, coverArtUrl: artworkUrl, updatedAt: DateTime.now())
+          : enriched.copyWith(updatedAt: DateTime.now());
 
       // Update the file in the list with enriched metadata
       final index = _mediaFiles.indexWhere((m) => m.filePath == filePath);
@@ -1242,20 +1373,38 @@ class MediaProvider extends ChangeNotifier {
       await organizeEbooksLibrary();
     }
 
+    // Enrich missing metadata — notify listeners every 10 files instead of
+    // per-file to avoid thousands of unnecessary UI rebuilds.
+    int enriched = 0;
     for (int i = 0; i < _mediaFiles.length; i++) {
+      bool changed = false;
       if (_mediaFiles[i].isAudio && _mediaFiles[i].artist == null) {
         _mediaFiles[i] = await _enrichAudioMetadata(_mediaFiles[i]);
-        notifyListeners();
+        changed = true;
       } else if (_mediaFiles[i].mediaKind != MediaKind.audio) {
-        _mediaFiles[i] = await _enrichVideoMetadata(_mediaFiles[i]);
-        notifyListeners();
+        if (_mediaFiles[i].posterUrl == null || _mediaFiles[i].synopsis == null) {
+          _mediaFiles[i] = await _enrichVideoMetadata(_mediaFiles[i]);
+          changed = true;
+        }
+      }
+      if (changed) {
+        enriched++;
+        if (enriched % 10 == 0) notifyListeners();
       }
     }
+    if (enriched > 0) notifyListeners();
 
     _isLoading = false;
     _saveLibrary();
     _syncServerLibrary();
     notifyListeners();
+  }
+
+  /// Search TMDB for Fix Match dialog
+  Future<List<Map<String, dynamic>>> searchTmdbForMatch(String query, {String type = 'movie'}) async {
+    final key = dotenv.env['TMDB_API_KEY'] ?? const String.fromEnvironment('TMDB_API_KEY');
+    if (key.isEmpty) return [];
+    return _mediaScraperService.searchTmdbMulti(query, key, type: type);
   }
 
   /// Manually refresh metadata for a specific media file
@@ -1270,6 +1419,7 @@ class MediaProvider extends ChangeNotifier {
       coverArtUrl: null,
       synopsis: null,
       description: null,
+      updatedAt: DateTime.now(),
     );
 
     MediaFile enriched;
@@ -1285,20 +1435,84 @@ class MediaProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Apply a manually-chosen TMDB result to a media file (or all episodes of a TV show).
+  /// [showGroupKey] is the exact key used by the UI to group episodes — pass it for TV
+  /// so we match every episode regardless of which metadata field the title lives in.
+  Future<void> applyManualMatch(MediaFile media, Map<String, dynamic> tmdbResult,
+      {String? showGroupKey}) async {
+    final tmdbApiKey = dotenv.env['TMDB_API_KEY'] ?? const String.fromEnvironment('TMDB_API_KEY');
+    final type = tmdbResult['type'] as String? ?? 'movie';
+    final id = tmdbResult['id'];
+
+    // Fetch full details from TMDB using the selected id
+    Map<String, dynamic>? details;
+    if (tmdbApiKey.isNotEmpty && id != null) {
+      details = await _mediaScraperService.fetchTmdbDetails(id as int, tmdbApiKey, type: type);
+    }
+
+    final title = (details?['title'] ?? details?['name'] ?? tmdbResult['title'] ?? '') as String;
+    final posterPath = details?['poster_path'] as String?;
+    final posterUrl = posterPath != null
+        ? 'https://image.tmdb.org/t/p/original$posterPath'
+        : tmdbResult['posterUrl'] as String?;
+    final synopsis = (details?['overview'] ?? tmdbResult['overview'] ?? '') as String;
+    final releaseDate = (details?['release_date'] ?? details?['first_air_date'] ?? tmdbResult['releaseDate'] ?? '') as String;
+    final rating = (details?['vote_average'] as num?)?.toDouble() ?? tmdbResult['rating'] as double?;
+    final genres = ((details?['genres'] as List?) ?? [])
+        .map<String>((g) => g['name'] as String? ?? '')
+        .where((g) => g.isNotEmpty)
+        .toList();
+
+    void patchFile(int index) {
+      final f = _mediaFiles[index];
+      _mediaFiles[index] = f.copyWith(
+        movieTitle: type == 'movie' ? title : f.movieTitle,
+        showTitle: type == 'tv' ? title : f.showTitle,
+        posterUrl: posterUrl,
+        synopsis: synopsis.isNotEmpty ? synopsis : f.synopsis,
+        releaseDate: releaseDate.isNotEmpty ? releaseDate : f.releaseDate,
+        rating: rating ?? f.rating,
+        genres: genres.isNotEmpty ? genres : f.genres,
+        updatedAt: DateTime.now(),
+      );
+    }
+
+    if (type == 'tv') {
+      // Use showGroupKey (the exact key the UI groups by) when provided;
+      // otherwise derive from the same priority chain as _groupShows.
+      final groupKey = showGroupKey ?? media.showTitle ?? media.animeTitle ?? media.parsedShowTitle ?? media.libraryTitle;
+      for (int i = 0; i < _mediaFiles.length; i++) {
+        final m = _mediaFiles[i];
+        if (m.mediaKind == MediaKind.tv) {
+          final mKey = m.showTitle ?? m.animeTitle ?? m.parsedShowTitle ?? m.libraryTitle;
+          if (mKey == groupKey) patchFile(i);
+        }
+      }
+    } else {
+      final index = _mediaFiles.indexWhere((m) => m.id == media.id);
+      if (index != -1) patchFile(index);
+    }
+
+    _saveLibrary();
+    _syncServerLibrary();
+    notifyListeners();
+  }
+
   Future<MediaFile> _enrichVideoMetadata(MediaFile file, {bool force = false}) async {
     // If it's already fully enriched, we might want to skip or just do a quick check
     var enriched = await _metadataService.enrichMediaFile(file);
-    final query = enriched.libraryTitle;
-
-    final tmdbApiKey = dotenv.env['TMDB_API_KEY'];
+    final tmdbApiKey = dotenv.env['TMDB_API_KEY'] ?? const String.fromEnvironment('TMDB_API_KEY');
+    
+    // Use the best available title for search
+    final searchTitle = enriched.movieTitle ?? enriched.showTitle ?? enriched.animeTitle ?? enriched.libraryTitle;
 
     // 1. Try TMDB (Movies & TV) - Primary high-quality source
     if (_settings.scraperToggles['tmdb'] == true &&
-        tmdbApiKey != null &&
+        tmdbApiKey.isNotEmpty &&
         (force || enriched.posterUrl == null || enriched.synopsis == null)) {
       final type = enriched.mediaKind == MediaKind.tv ? 'tv' : 'movie';
       final data =
-          await _mediaScraperService.searchTmdb(query, tmdbApiKey, type: type);
+          await _mediaScraperService.searchTmdb(searchTitle, tmdbApiKey, type: type);
       if (data != null) {
         enriched = enriched.copyWith(
           movieTitle: enriched.mediaKind == MediaKind.movie
@@ -1308,9 +1522,11 @@ class MediaProvider extends ChangeNotifier {
               ? (data['title'] as String?)
               : enriched.showTitle,
           posterUrl: enriched.posterUrl ?? (data['posterUrl'] as String?),
+          backdropUrl: enriched.backdropUrl ?? (data['backdropUrl'] as String?),
           synopsis: enriched.synopsis ?? (data['description'] as String?),
           rating: enriched.rating ?? (data['rating'] as num?)?.toDouble(),
           releaseDate: enriched.releaseDate ?? (data['releaseDate'] as String?),
+          updatedAt: DateTime.now(),
         );
       }
     }
@@ -1319,13 +1535,14 @@ class MediaProvider extends ChangeNotifier {
     if (_settings.scraperToggles['jikan'] == true &&
         enriched.contentType == ContentType.anime &&
         enriched.posterUrl == null) {
-      final data = await _mediaScraperService.searchJikan(query);
+      final data = await _mediaScraperService.searchJikan(searchTitle);
       if (data != null) {
         enriched = enriched.copyWith(
           animeTitle: data['title'] as String?,
           posterUrl: enriched.posterUrl ?? (data['posterUrl'] as String?),
           synopsis: enriched.synopsis ?? (data['description'] as String?),
           rating: enriched.rating ?? (data['score'] as num?)?.toDouble(),
+          updatedAt: DateTime.now(),
         );
       }
     }
@@ -1334,7 +1551,7 @@ class MediaProvider extends ChangeNotifier {
     if (_settings.scraperToggles['tvmaze'] == true &&
         enriched.mediaKind == MediaKind.tv &&
         enriched.posterUrl == null) {
-      final data = await _mediaScraperService.searchTvMaze(query);
+      final data = await _mediaScraperService.searchTvMaze(searchTitle);
       if (data != null) {
         enriched = enriched.copyWith(
           showTitle: data['title'] as String?,
@@ -1344,13 +1561,14 @@ class MediaProvider extends ChangeNotifier {
           genres: enriched.genres.isNotEmpty
               ? enriched.genres
               : (data['genres'] as List?)?.cast<String>(),
+          updatedAt: DateTime.now(),
         );
       }
     }
 
     // 4. Wikidata for Cast (if missing)
     if (_settings.scraperToggles['wikidata'] == true && enriched.cast.isEmpty) {
-      final cast = await _actorMetadataService.getMovieCast(query);
+      final cast = await _actorMetadataService.getMovieCast(searchTitle);
       if (cast.isNotEmpty) {
         enriched = enriched.copyWith(
           cast: cast
@@ -1361,6 +1579,7 @@ class MediaProvider extends ChangeNotifier {
               .map((e) => e['imageUrl'] as String? ?? '')
               .where((e) => e.isNotEmpty)
               .toList(),
+          updatedAt: DateTime.now(),
         );
       }
     }
@@ -1390,6 +1609,7 @@ class MediaProvider extends ChangeNotifier {
           synopsis: enriched.synopsis ?? artwork.description,
           rating: enriched.rating ?? artwork.rating,
           genres: genres,
+          updatedAt: DateTime.now(),
         );
       }
     }
@@ -1400,31 +1620,85 @@ class MediaProvider extends ChangeNotifier {
   Future<MediaFile> _enrichAudioMetadata(
     MediaFile file, {
     Map<String, dynamic>? spotifyMetadata,
+    bool force = false,
   }) async {
-    final metadata = spotifyMetadata ??
-        await _spotifyService.getTrackMetadata(file.fileName);
-    if (metadata != null) {
-      final name = metadata['name']?.toString() ?? file.title;
-      final artists =
-          (metadata['artists'] as List).map((a) => a['name']).join(', ');
-      final album = metadata['album']['name'];
-      final artwork = metadata['album']['images'].isNotEmpty
-          ? metadata['album']['images'][0]['url']
-          : null;
-      final releaseDate = metadata['album']['release_date'];
-      final trackNumber = metadata['track_number'];
+    // 1. Try local tags first (more accurate for the specific file)
+    final localTags = await _ytdlpService.getMediaMetadata(file.filePath);
+    String? title = localTags['title'];
+    String? artist = localTags['artist'];
+    String? album = localTags['album'];
+    int? trackNum = int.tryParse(localTags['track']?.split('/').first ?? '');
 
+    // 2. If local tags are mostly empty (or force), fallback to Spotify search by filename
+    if (((title == null || title.isEmpty) || force) && spotifyMetadata == null) {
+      final metadata = await _spotifyService.getTrackMetadata(file.fileName);
+      if (metadata != null) {
+        title = metadata['name']?.toString();
+        artist = (metadata['artists'] as List).map((a) => a['name']).join(', ');
+        album = metadata['album']['name'];
+        trackNum = metadata['track_number'];
+        final artwork = _spotifyArtworkUrl(metadata);
+            
+        return file.copyWith(
+          metadataTitle: title,
+          artist: artist,
+          album: album,
+          posterUrl: artwork,
+          coverArtUrl: artwork,
+          releaseDate: metadata['album']['release_date'],
+          trackNumber: trackNum,
+          updatedAt: DateTime.now(),
+        );
+      }
+    }
+
+    // 2.5 If we have tags but NO artwork (or force), still try Spotify search
+    if (file.posterUrl == null || file.posterUrl!.isEmpty || force) {
+      final query = (artist != null && title != null) ? '$artist $title' : file.fileName;
+      final metadata = await _spotifyService.getTrackMetadata(query);
+      if (metadata != null) {
+        final artwork = _spotifyArtworkUrl(metadata);
+        if (artwork != null) {
+          return file.copyWith(
+            metadataTitle: title ?? metadata['name']?.toString(),
+            artist: artist ?? (metadata['artists'] as List).map((a) => a['name']).join(', '),
+            album: album ?? metadata['album']['name'],
+            posterUrl: artwork,
+            coverArtUrl: artwork,
+            updatedAt: DateTime.now(),
+          );
+        }
+      }
+    }
+
+    // 3. If we have Spotify metadata passed in (e.g. from a download), use it to fill gaps
+    if (spotifyMetadata != null) {
+      title ??= spotifyMetadata['name']?.toString();
+      artist ??= (spotifyMetadata['artists'] as List).map((a) => a['name']).join(', ');
+      album ??= spotifyMetadata['album']['name'];
+      trackNum ??= spotifyMetadata['track_number'];
+      final artwork = _spotifyArtworkUrl(spotifyMetadata);
+          
       return file.copyWith(
-        metadataTitle: name,
-        artist: artists,
+        metadataTitle: title,
+        artist: artist,
         album: album,
-        posterUrl: artwork,
-        coverArtUrl: artwork,
-        releaseDate: releaseDate,
-        trackNumber: trackNumber,
+        posterUrl: file.posterUrl ?? artwork,
+        coverArtUrl: file.coverArtUrl ?? artwork,
+        releaseDate: file.releaseDate ?? spotifyMetadata['album']['release_date'],
+        trackNumber: trackNum,
+        updatedAt: DateTime.now(),
       );
     }
-    return file;
+
+    // Return what we found from local tags or original file
+    return file.copyWith(
+      metadataTitle: title?.isNotEmpty == true ? title : null,
+      artist: artist?.isNotEmpty == true ? artist : null,
+      album: album?.isNotEmpty == true ? album : null,
+      trackNumber: trackNum,
+      updatedAt: DateTime.now(),
+    );
   }
 
   String? _spotifyArtworkUrl(Map<String, dynamic>? metadata) {
@@ -1534,6 +1808,7 @@ class MediaProvider extends ChangeNotifier {
       _mediaFiles[index] = _mediaFiles[index].copyWith(
         playCount: _mediaFiles[index].playCount + 1,
         isWatched: true,
+        updatedAt: DateTime.now(),
       );
       media = _mediaFiles[index];
       _saveLibrary();
@@ -1590,11 +1865,8 @@ class MediaProvider extends ChangeNotifier {
       if (isNetwork) {
         _videoController = VideoPlayerController.networkUrl(uri!);
       } else if (Platform.isWindows) {
-        // Ensure absolute path and correct URI format for fvp on Windows
-        final absolutePath = File(filePath).absolute.path;
-        _videoController = VideoPlayerController.networkUrl(
-          Uri.file(absolutePath),
-        );
+        // Use file controller for local files on Windows (fvp/mdk handles this well)
+        _videoController = VideoPlayerController.file(File(filePath));
       } else {
         _videoController = VideoPlayerController.file(File(filePath));
       }
@@ -1716,9 +1988,12 @@ class MediaProvider extends ChangeNotifier {
 
   /// Toggle favorite for a media file
   void toggleFavorite(String mediaId) {
-    final index = _mediaFiles.indexWhere((m) => m.id == mediaId);
-    if (index != -1) {
-      _mediaFiles[index].isFavorite = !_mediaFiles[index].isFavorite;
+     final index = _mediaFiles.indexWhere((m) => m.id == mediaId);
+     if (index != -1) {
+       _mediaFiles[index] = _mediaFiles[index].copyWith(
+         isFavorite: !_mediaFiles[index].isFavorite,
+         updatedAt: DateTime.now(),
+       );
       _saveLibrary(); // BUG-03: already debounced
       notifyListeners();
     }
@@ -2014,6 +2289,7 @@ class MediaProvider extends ChangeNotifier {
           coverArtUrl: artwork.coverArtUrl,
           description: artwork.description,
           animeTitle: artwork.title ?? file.animeTitle,
+          updatedAt: DateTime.now(),
         );
       }
       _artworkScanned++;
@@ -2023,6 +2299,153 @@ class MediaProvider extends ChangeNotifier {
     _isScanningArtwork = false;
     _saveLibrary();
     notifyListeners();
+  }
+
+  Future<void> updateMusicArtwork() async {
+    if (_isScanningArtwork) return;
+    _isScanningArtwork = true;
+    final musicFiles = _mediaFiles.where((m) => m.isAudio).toList();
+    _artworkScanned = 0;
+    _artworkTotal = musicFiles.length;
+    notifyListeners();
+
+    for (int i = 0; i < _mediaFiles.length; i++) {
+      if (_mediaFiles[i].isAudio) {
+        // Force refresh by clearing existing artwork first if missing or force
+        if (_mediaFiles[i].posterUrl == null || _mediaFiles[i].posterUrl!.isEmpty) {
+          _mediaFiles[i] = await _enrichAudioMetadata(_mediaFiles[i]);
+        }
+        _artworkScanned++;
+        notifyListeners();
+      }
+    }
+
+    _isScanningArtwork = false;
+    _saveLibrary();
+    _syncServerLibrary();
+    notifyListeners();
+  }
+
+  /// Force-process every music track through Spotify: update both artwork and title.
+  Future<void> processAllMusicViaSpotify() async {
+    if (_isScanningArtwork) return;
+    _isScanningArtwork = true;
+    _artworkScanned = 0;
+    _artworkTotal = _mediaFiles.where((m) => m.isAudio).length;
+    notifyListeners();
+
+    for (int i = 0; i < _mediaFiles.length; i++) {
+      if (_mediaFiles[i].isAudio) {
+        _mediaFiles[i] = await _enrichAudioMetadata(
+          _mediaFiles[i],
+          force: true,
+        );
+        _artworkScanned++;
+        notifyListeners();
+      }
+    }
+
+    _isScanningArtwork = false;
+    _saveLibrary();
+    _syncServerLibrary();
+    notifyListeners();
+  }
+
+  /// Enrich all music via Spotify, then move files on disk into
+  /// {libraryRoot}/{Artist}/{Album}/{TrackNum - Title.ext} folder structure.
+  Future<void> organizeMusicToFolders() async {
+    if (_isScanningArtwork) return;
+
+    _isScanningArtwork = true;
+    _artworkScanned = 0;
+    notifyListeners();
+
+    final audioIndices = <int>[];
+    for (int i = 0; i < _mediaFiles.length; i++) {
+      if (_mediaFiles[i].isAudio) audioIndices.add(i);
+    }
+    _artworkTotal = audioIndices.length * 2; // phase 1 enrich + phase 2 move
+    notifyListeners();
+
+    // Phase 1 — Spotify enrichment (force re-fetch metadata for every track)
+    for (final i in audioIndices) {
+      _mediaFiles[i] = await _enrichAudioMetadata(_mediaFiles[i], force: true);
+      _artworkScanned++;
+      if (_artworkScanned % 5 == 0) notifyListeners();
+    }
+
+    // Phase 2 — Move files on disk into Artist/Album folders
+    int moved = 0;
+    for (final i in audioIndices) {
+      final m = _mediaFiles[i];
+
+      final artist = m.artist?.trim().isNotEmpty == true ? m.artist! : 'Unknown Artist';
+      final album = m.album?.trim().isNotEmpty == true ? m.album! : 'Unknown Album';
+      final title = (m.metadataTitle?.trim().isNotEmpty == true
+          ? m.metadataTitle!
+          : p.basenameWithoutExtension(m.filePath));
+      final ext = p.extension(m.filePath).toLowerCase();
+      final trackNum = m.trackNumber;
+
+      // Find the library root that contains this file
+      String rootDir = p.dirname(m.filePath);
+      for (final folder in _libraryFolders) {
+        if (m.filePath.startsWith(folder)) {
+          rootDir = folder;
+          break;
+        }
+      }
+
+      final safeArtist = _toSafePathSegment(artist);
+      final safeAlbum = _toSafePathSegment(album);
+      final trackPrefix = trackNum != null
+          ? '${trackNum.toString().padLeft(2, '0')} - '
+          : '';
+      final safeTitle = _toSafePathSegment(title);
+
+      final targetDir = p.join(rootDir, safeArtist, safeAlbum);
+      final targetPath = p.join(targetDir, '$trackPrefix$safeTitle$ext');
+
+      if (m.filePath != targetPath) {
+        try {
+          await Directory(targetDir).create(recursive: true);
+          final srcFile = File(m.filePath);
+          if (await srcFile.exists()) {
+            // rename works cross-directory on same drive; copy+delete for different drive
+            try {
+              await srcFile.rename(targetPath);
+            } on FileSystemException {
+              await srcFile.copy(targetPath);
+              await srcFile.delete();
+            }
+            _mediaFiles[i] = m.copyWith(
+              filePath: targetPath,
+              fileName: p.basename(targetPath),
+            );
+            moved++;
+          }
+        } catch (e) {
+          print('Music organize: failed to move ${m.filePath}: $e');
+        }
+      }
+
+      _artworkScanned++;
+      if (_artworkScanned % 5 == 0) notifyListeners();
+    }
+
+    _isScanningArtwork = false;
+    _saveLibrary();
+    _syncServerLibrary();
+    notifyListeners();
+  }
+
+  String _toSafePathSegment(String name) {
+    // Remove characters invalid in Windows/macOS/Linux file names
+    return name
+        .replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1F]'), '_')
+        .replaceAll(RegExp(r'\.{2,}'), '.')
+        .trim()
+        .replaceAll(RegExp(r'[\s.]+$'), ''); // no trailing spaces or dots
   }
 
   /// Get the ArtworkScraperService instance
@@ -2036,10 +2459,61 @@ class MediaProvider extends ChangeNotifier {
     _saveDebounce?.cancel();
     _saveDebounce = Timer(const Duration(milliseconds: 500), () async {
       try {
+        // Save to JSON (Desktop and Backup)
         final dir = await getApplicationDocumentsDirectory();
         final file = File('${dir.path}/media_library.json');
         final json = _mediaFiles.map((m) => m.toJson()).toList();
         await file.writeAsString(jsonEncode(json));
+
+        // Save to SQLite on Android
+        if (Platform.isAndroid) {
+          final db = await DBService.instance.database;
+          await db.transaction((txn) async {
+            for (final media in _mediaFiles) {
+              final row = {
+                'id': media.id,
+                'file_path': media.filePath,
+                'file_name': media.fileName,
+                'thumbnail_path': media.thumbnailPath,
+                'duration': media.duration.inMilliseconds,
+                'added_at': media.addedAt.toIso8601String(),
+                'updated_at': media.updatedAt.toIso8601String(),
+                'is_favorite': media.isFavorite ? 1 : 0,
+                'content_type': media.contentType.index,
+                'media_kind': media.mediaKind.index,
+                'is_watched': media.isWatched ? 1 : 0,
+                'play_count': media.playCount,
+                'resolution': media.resolution,
+                'language': media.language,
+                'metadata_id': media.metadataId,
+                'movie_title': media.movieTitle,
+                'show_title': media.showTitle,
+                'episode_title': media.episodeTitle,
+                'synopsis': media.synopsis,
+                'poster_url': media.posterUrl,
+                'backdrop_url': media.backdropUrl,
+                'thumbnail_url': media.thumbnailUrl,
+                'season_poster_url': media.seasonPosterUrl,
+                'trailer_url': media.trailerUrl,
+                'release_date': media.releaseDate,
+                'release_year': media.releaseYear,
+                'rating': media.rating,
+                'genres': jsonEncode(media.genres),
+                'cast_list': jsonEncode(media.cast),
+                'directors': jsonEncode(media.directors),
+                'writers': jsonEncode(media.writers),
+                'artist': media.artist,
+                'album': media.album,
+                'track_number': media.trackNumber,
+                'watch_progress': media.watchProgress,
+                'last_played': media.lastPlayed?.toIso8601String(),
+                'is_deleted': media.isDeleted ? 1 : 0,
+              };
+              await txn.insert('media_library', row,
+                  conflictAlgorithm: ConflictAlgorithm.replace);
+            }
+          });
+        }
       } catch (e) {
         debugPrint('Error saving library: $e');
       }
@@ -2048,9 +2522,16 @@ class MediaProvider extends ChangeNotifier {
 
   Future<void> loadLibrary() async {
     try {
+      if (Platform.isAndroid) {
+        _mediaFiles = await SyncService.instance.loadCachedLibrary();
+        if (_mediaFiles.isNotEmpty) {
+          notifyListeners();
+        }
+      }
+
       final dir = await getApplicationDocumentsDirectory();
       final file = File('${dir.path}/media_library.json');
-      if (await file.exists()) {
+      if (await file.exists() && _mediaFiles.isEmpty) {
         final json = jsonDecode(await file.readAsString()) as List;
         _mediaFiles = json
             .map((j) => MediaFile.fromJson(j as Map<String, dynamic>))
@@ -2107,6 +2588,25 @@ class MediaProvider extends ChangeNotifier {
     if (!Platform.isAndroid && _settings.autoStartServer) {
       startMediaServer();
     }
+
+    // Keep provider in sync when tunnel state changes outside our control
+    cloudflareTunnel.isRunning.addListener(_onTunnelStateChanged);
+  }
+
+  void _onTunnelStateChanged() {
+    // If tunnel died unexpectedly while setting said it should be on, sync the flag
+    if (!cloudflareTunnel.isRunning.value && _settings.enableRemoteTunnel) {
+      // Only clear the flag if this wasn't triggered by a user stop
+      // (user stops go through stopRemoteTunnel which sets the flag to false first)
+      // We detect "unexpected" by checking the status string set by the reconnect logic
+      final s = cloudflareTunnel.status.value;
+      final isReconnecting = s.contains('Reconnecting') || s.contains('reconnect');
+      if (!isReconnecting) {
+        _settings.enableRemoteTunnel = false;
+        _saveSettings();
+      }
+    }
+    notifyListeners();
   }
 
   Future<void> _scanStartup() async {
@@ -2256,5 +2756,37 @@ class MediaProvider extends ChangeNotifier {
     await _downloader.deleteModel(modelName);
     _installedModels[modelName] = false;
     notifyListeners();
+  }
+
+  // ─── Music Library Helpers ───────────────────────────────────────────
+
+  List<Map<String, dynamic>> getLocalAlbums(String artistName) {
+    final artistSongs = audioFiles.where((m) => (m.artist ?? 'Unknown Artist') == artistName).toList();
+    final Map<String, List<MediaFile>> albumGroups = {};
+    for (var song in artistSongs) {
+      final album = song.album ?? 'Unknown Album';
+      albumGroups.putIfAbsent(album, () => []).add(song);
+    }
+
+    return albumGroups.entries.map((entry) {
+      final firstSong = entry.value.first;
+      return {
+        'id': 'local_${artistName}_${entry.key}',
+        'name': entry.key,
+        'artist': artistName,
+        'imageUrl': firstSong.posterUrl ?? firstSong.coverArtUrl,
+        'isLocal': true,
+        'songs': entry.value,
+        'releaseDate': firstSong.releaseDate ?? '',
+      };
+    }).toList()..sort((a, b) => (b['releaseDate'] as String).compareTo(a['releaseDate'] as String));
+  }
+
+  List<MediaFile> getLocalArtistSongs(String artistName) {
+    return audioFiles.where((m) => (m.artist ?? 'Unknown Artist') == artistName).toList()
+      ..sort((a, b) {
+        if (a.album != b.album) return (a.album ?? '').compareTo(b.album ?? '');
+        return (a.trackNumber ?? 0).compareTo(b.trackNumber ?? 0);
+      });
   }
 }

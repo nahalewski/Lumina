@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
+import '../services/app_update_service.dart';
 import '../services/iptv_service.dart';
 
 class RemoteMediaFile {
@@ -13,6 +14,7 @@ class RemoteMediaFile {
   final String extension;
   final Duration duration;
   final String? coverArtUrl;
+  final String? posterUrl;
   final bool isVideo;
   final bool isAudio;
   final String? artist;
@@ -20,6 +22,13 @@ class RemoteMediaFile {
   final int? trackNumber;
   final String mediaKind;
   final String contentType;
+  final String? showTitle;
+  final String? movieTitle;
+  final int? season;
+  final int? episode;
+  final String? synopsis;
+  final String? releaseDate;
+  final double? rating;
 
   RemoteMediaFile({
     required this.id,
@@ -28,6 +37,7 @@ class RemoteMediaFile {
     required this.extension,
     required this.duration,
     this.coverArtUrl,
+    this.posterUrl,
     required this.isVideo,
     required this.isAudio,
     this.artist,
@@ -35,7 +45,16 @@ class RemoteMediaFile {
     this.trackNumber,
     required this.mediaKind,
     required this.contentType,
+    this.showTitle,
+    this.movieTitle,
+    this.season,
+    this.episode,
+    this.synopsis,
+    this.releaseDate,
+    this.rating,
   });
+
+  String get displayArt => posterUrl ?? coverArtUrl ?? '';
 
   factory RemoteMediaFile.fromJson(Map<String, dynamic> json) {
     return RemoteMediaFile(
@@ -45,6 +64,7 @@ class RemoteMediaFile {
       extension: json['extension'] as String,
       duration: Duration(milliseconds: json['duration'] as int),
       coverArtUrl: json['coverArtUrl'] as String?,
+      posterUrl: json['posterUrl'] as String?,
       isVideo: json['isVideo'] as bool,
       isAudio: json['isAudio'] as bool,
       artist: json['artist'] as String?,
@@ -52,8 +72,39 @@ class RemoteMediaFile {
       trackNumber: json['trackNumber'] as int?,
       mediaKind: json['mediaKind'] as String? ?? 'movie',
       contentType: json['contentType'] as String? ?? 'general',
+      showTitle: json['showTitle'] as String?,
+      movieTitle: json['movieTitle'] as String?,
+      season: json['season'] as int?,
+      episode: json['episode'] as int?,
+      synopsis: json['synopsis'] as String?,
+      releaseDate: json['releaseDate'] as String?,
+      rating: (json['rating'] as num?)?.toDouble(),
     );
   }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': title,
+        'fileName': fileName,
+        'extension': extension,
+        'duration': duration.inMilliseconds,
+        'coverArtUrl': coverArtUrl,
+        'posterUrl': posterUrl,
+        'isVideo': isVideo,
+        'isAudio': isAudio,
+        'artist': artist,
+        'album': album,
+        'trackNumber': trackNumber,
+        'mediaKind': mediaKind,
+        'contentType': contentType,
+        'showTitle': showTitle,
+        'movieTitle': movieTitle,
+        'season': season,
+        'episode': episode,
+        'synopsis': synopsis,
+        'releaseDate': releaseDate,
+        'rating': rating,
+      };
 }
 
 class RemoteMediaProvider extends ChangeNotifier {
@@ -77,10 +128,16 @@ class RemoteMediaProvider extends ChangeNotifier {
   int _remoteLibrarySize = 0;
   int get remoteLibrarySize => _remoteLibrarySize;
 
+  // Background update check result (set automatically after connect)
+  AppUpdateInfo? _pendingUpdate;
+  AppUpdateInfo? get pendingUpdate => _pendingUpdate;
+  final _updateService = AppUpdateService();
+
   String? _deviceId;
   String _deviceName = 'Unknown Android Device';
   bool _isPaired = false;
   bool _isDenied = false;
+  bool _isFetching = false;
 
   String? get deviceId => _deviceId;
   String get deviceName => _deviceName;
@@ -110,12 +167,16 @@ class RemoteMediaProvider extends ChangeNotifier {
         _serverToken = data['token'];
         _customBaseUrl = data['baseUrl'];
         _deviceId = data['deviceId'];
+        _isPaired = data['isPaired'] as bool? ?? false;
+        _isDenied = data['isDenied'] as bool? ?? false;
 
         if (_deviceId == null) {
           _deviceId = 'dev_${DateTime.now().millisecondsSinceEpoch}';
           _saveSettings();
         }
 
+        // Load cached library immediately so the UI isn't blank on launch
+        await _loadMediaCache();
         notifyListeners();
         connectAndFetch();
       } else {
@@ -133,6 +194,37 @@ class RemoteMediaProvider extends ChangeNotifier {
       }
     } catch (e) {
       debugPrint('Error loading remote settings: $e');
+    }
+  }
+
+  Future<void> _loadMediaCache() async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/remote_media_cache.json');
+      if (!await file.exists()) return;
+      final data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      final savedAt = DateTime.tryParse(data['savedAt'] as String? ?? '');
+      if (savedAt != null && DateTime.now().difference(savedAt).inHours < 24) {
+        final List<dynamic> mediaJson = data['media'] as List;
+        _media = mediaJson
+            .map((j) => RemoteMediaFile.fromJson(j as Map<String, dynamic>))
+            .toList();
+      }
+    } catch (e) {
+      debugPrint('Error loading media cache: $e');
+    }
+  }
+
+  Future<void> _saveMediaCache() async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/remote_media_cache.json');
+      await file.writeAsString(jsonEncode({
+        'savedAt': DateTime.now().toIso8601String(),
+        'media': _media.map((m) => m.toJson()).toList(),
+      }));
+    } catch (e) {
+      debugPrint('Error saving media cache: $e');
     }
   }
 
@@ -166,6 +258,8 @@ class RemoteMediaProvider extends ChangeNotifier {
         'token': _serverToken,
         'baseUrl': _customBaseUrl,
         'deviceId': _deviceId,
+        'isPaired': _isPaired,
+        'isDenied': _isDenied,
       }));
     } catch (e) {
       debugPrint('Error saving remote settings: $e');
@@ -282,9 +376,11 @@ class RemoteMediaProvider extends ChangeNotifier {
   }
 
   Future<void> connectAndFetch() async {
+    if (_isFetching) return; // Prevent concurrent calls (IndexedStack builds multiple screens)
+    _isFetching = true;
     await _ensureDeviceIdentity();
     _isLoading = true;
-    _baseUrl = null; // Reset
+    _baseUrl = null;
     notifyListeners();
 
     // Try to find a working base URL
@@ -293,22 +389,19 @@ class RemoteMediaProvider extends ChangeNotifier {
     for (final url in _possibleUrls) {
       debugPrint('Trying connection to: $url');
       try {
-        // Use /api/discover instead of health to get auto-pairing token
         final response = await http
             .get(Uri.parse('$url/api/discover'), headers: _authHeaders)
             .timeout(const Duration(seconds: 3));
 
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body);
-
           final pairingStatus = data['pairingStatus'] as String? ?? 'unpaired';
           _isPaired = pairingStatus == 'approved';
           _isDenied = pairingStatus == 'denied';
           _remoteLibrarySize = data['librarySize'] ?? 0;
           _baseUrl = url;
           _isConnected = true;
-          debugPrint(
-              'Connected successfully to: $_baseUrl (Paired: $_isPaired)');
+          debugPrint('Connected to: $_baseUrl (Paired: $_isPaired)');
           break;
         }
       } catch (e) {
@@ -317,30 +410,84 @@ class RemoteMediaProvider extends ChangeNotifier {
     }
 
     if (_isConnected) {
-      await _refreshPairingStatus();
       if (_isPaired) {
+        // Already confirmed paired from discover — fetch right away
         await fetchLibrary();
         await fetchIptvData();
-      }
-    } else {
-      // Auto-discovery via UDP broadcast
-      await discoverServer();
-
-      if (_isConnected) {
+        // Verify approval still valid in background (no blocking wait)
+        _quickPairingVerify();
+        // Check for APK updates in background (Android only)
+        if (Platform.isAndroid) _backgroundUpdateCheck();
+      } else {
+        // Not yet approved — start the polling wait
         await _refreshPairingStatus();
         if (_isPaired) {
           await fetchLibrary();
           await fetchIptvData();
         }
+      }
+    } else {
+      await discoverServer();
+      if (_isConnected) {
+        if (_isPaired) {
+          await fetchLibrary();
+          await fetchIptvData();
+        } else {
+          await _refreshPairingStatus();
+          if (_isPaired) {
+            await fetchLibrary();
+            await fetchIptvData();
+          }
+        }
       } else {
-        _media = [];
+        if (_media.isEmpty) _media = [];
         _remoteLibrarySize = 0;
         debugPrint('No Lumina Media Server found after scan and discovery');
       }
     }
 
     _isLoading = false;
+    _isFetching = false;
     notifyListeners();
+  }
+
+  /// Check for an APK update from the server; stores result for the Updates settings tile.
+  Future<void> _backgroundUpdateCheck() async {
+    final url = _baseUrl ?? _customBaseUrl;
+    final token = _serverToken ?? '';
+    if (url == null || url.isEmpty) return;
+    try {
+      final info = await _updateService.checkForUpdate(url, token);
+      if (info != null) {
+        _pendingUpdate = info;
+        notifyListeners();
+      }
+    } catch (_) {}
+  }
+
+  /// One-shot pairing check (no polling) — runs in background after fast connect
+  Future<void> _quickPairingVerify() async {
+    if (_baseUrl == null) return;
+    try {
+      final response = await http
+          .get(Uri.parse('$_baseUrl/api/pairing/status'), headers: _authHeaders)
+          .timeout(const Duration(seconds: 5));
+      if (response.statusCode == 200) {
+        final status = jsonDecode(response.body)['status'] as String? ?? 'unpaired';
+        final wasPaired = _isPaired;
+        _isPaired = status == 'approved';
+        _isDenied = status == 'denied';
+        _authError = _isDenied ? 'This device was denied access.' : null;
+        await _saveSettings();
+        if (!_isPaired && wasPaired) {
+          // Lost approval — clear library
+          _media = [];
+          notifyListeners();
+        }
+      }
+    } catch (e) {
+      debugPrint('Quick pairing verify error: $e');
+    }
   }
 
   Future<void> _refreshPairingStatus() async {
@@ -421,32 +568,69 @@ class RemoteMediaProvider extends ChangeNotifier {
     }).toList();
   }
 
+  static const int _fetchPageSize = 250;
+
   Future<void> fetchLibrary() async {
     if (_baseUrl == null) return;
 
     try {
-      final response = await http.get(Uri.parse('$_baseUrl/api/library'),
-          headers: _authHeaders);
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final List<dynamic> mediaJson = data['media'];
-        _media = mediaJson.map((j) => RemoteMediaFile.fromJson(j)).toList();
-        _authError = null;
+      // Fetch in pages so we never download one giant JSON blob
+      final accumulated = <RemoteMediaFile>[];
+      int offset = 0;
+      int total = 1; // set after first response
+
+      while (offset < total) {
+        final url = Uri.parse(
+          '$_baseUrl/api/library?offset=$offset&limit=$_fetchPageSize',
+        );
+        final response =
+            await http.get(url, headers: _authHeaders).timeout(
+          const Duration(seconds: 30),
+        );
+
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body) as Map<String, dynamic>;
+          total = data['total'] as int? ?? 0;
+          final List<dynamic> page = data['media'] as List;
+          accumulated.addAll(
+            page.map((j) =>
+                RemoteMediaFile.fromJson(j as Map<String, dynamic>)),
+          );
+          offset += page.length;
+          // Notify with what we have so far — UI shows data incrementally
+          _media = List.from(accumulated);
+          _authError = null;
+          _isPaired = true;
+          notifyListeners();
+          if (page.isEmpty) break; // safety — server returned empty page
+        } else if (response.statusCode == 401) {
+          _isPaired = false;
+          _isDenied = false;
+          _authError = 'Waiting for approval from server...';
+          _media = [];
+          await _saveSettings();
+          return;
+        } else if (response.statusCode == 403) {
+          _isPaired = false;
+          _isDenied = true;
+          _authError = 'This device was denied access.';
+          _media = [];
+          await _saveSettings();
+          return;
+        } else {
+          break;
+        }
+      }
+
+      if (accumulated.isNotEmpty) {
+        _media = accumulated;
         _isPaired = true;
-      } else if (response.statusCode == 401) {
-        _isPaired = false;
-        _isDenied = false;
-        _authError = 'Waiting for approval from server...';
-        _media = [];
-      } else if (response.statusCode == 403) {
-        _isPaired = false;
-        _isDenied = true;
-        _authError = 'This device was denied access.';
-        _media = [];
+        await _saveMediaCache();
+        await _saveSettings();
       }
     } catch (e) {
       debugPrint('Error fetching library: $e');
-      _authError = 'Error: $e';
+      // Keep cached media on network failure
     }
   }
 
@@ -503,6 +687,27 @@ class RemoteMediaProvider extends ChangeNotifier {
       _isPreparingPlayback = false;
     }
     notifyListeners();
+  }
+
+  /// Skip to next/previous track in the same mediaKind bucket
+  Future<void> skipNext() async {
+    if (_currentMedia == null) return;
+    final kind = _currentMedia!.mediaKind;
+    final bucket = _media.where((m) => m.mediaKind == kind).toList();
+    final idx = bucket.indexWhere((m) => m.id == _currentMedia!.id);
+    if (idx != -1 && idx < bucket.length - 1) {
+      await playMedia(bucket[idx + 1]);
+    }
+  }
+
+  Future<void> skipPrevious() async {
+    if (_currentMedia == null) return;
+    final kind = _currentMedia!.mediaKind;
+    final bucket = _media.where((m) => m.mediaKind == kind).toList();
+    final idx = bucket.indexWhere((m) => m.id == _currentMedia!.id);
+    if (idx > 0) {
+      await playMedia(bucket[idx - 1]);
+    }
   }
 
   Future<void> stopPlayback() async {

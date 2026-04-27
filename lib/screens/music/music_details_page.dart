@@ -22,7 +22,10 @@ class MusicDetailsPage extends StatefulWidget {
     required this.type,
     required this.title,
     this.artworkUrl,
+    this.onPlayMedia,
   });
+
+  final VoidCallback? onPlayMedia;
 
   @override
   State<MusicDetailsPage> createState() => _MusicDetailsPageState();
@@ -193,6 +196,7 @@ class _MusicDetailsPageState extends State<MusicDetailsPage> {
                     metadataTitle: track.title,
                   );
                   mediaProvider.playMedia(file);
+                  widget.onPlayMedia?.call();
                 }
               : () => _downloadTrack(context, track, mediaProvider),
         );

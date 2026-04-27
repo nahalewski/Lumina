@@ -21,6 +21,10 @@ class MediaFile {
   List<String> subtitleTracks;
   List<String> audioTracks;
   final String? metadataTitle;
+  final DateTime updatedAt;
+  final bool isDeleted;
+  double watchProgress;
+  DateTime? lastPlayed;
 
   // Plex-style library metadata
   final MediaKind mediaKind;
@@ -102,7 +106,12 @@ class MediaFile {
     this.album,
     this.trackNumber,
     this.metadataTitle,
-  })  : addedAt = addedAt ?? DateTime.now(),
+    DateTime? updatedAt,
+    this.isDeleted = false,
+    this.watchProgress = 0.0,
+    this.lastPlayed,
+  })  : updatedAt = updatedAt ?? DateTime.now(),
+        addedAt = addedAt ?? DateTime.now(),
         contentType = contentType ?? detectContentType(fileName),
         mediaKind = mediaKind ?? detectMediaKind(fileName),
         subtitleTracks = subtitleTracks ?? const [],
@@ -164,7 +173,7 @@ class MediaFile {
     final lower = name.toLowerCase();
 
     // Priority 1: Clear audio extensions
-    if (['.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a', '.opus'].any(lower.endsWith)) {
+    if (['.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a', '.opus', '.wma', '.mka', '.m4p', '.aiff', '.alac'].any(lower.endsWith)) {
       return MediaKind.audio;
     }
 
@@ -199,8 +208,10 @@ class MediaFile {
     if (['.cbz', '.cbr'].any(lower.endsWith)) return MediaKind.comic;
     if (['.zip', '.rar'].any(lower.endsWith) && (lower.contains('manga') || lower.contains('chapter'))) return MediaKind.manga;
 
-    // Priority 4: Webm can be audio if no TV pattern matched
-    if (lower.endsWith('.webm')) return MediaKind.audio;
+    // Priority 4: Explicit Video Extensions
+    if (['.mp4', '.mkv', '.mov', '.avi', '.webm', '.wmv', '.flv', '.ts', '.m4v', '.3gp', '.mpg', '.mpeg', '.vob', '.ogv', '.qt'].any(lower.endsWith)) {
+      return tvPatterns.any((p) => p.hasMatch(name)) ? MediaKind.tv : MediaKind.movie;
+    }
 
     return MediaKind.movie;
   }
@@ -222,9 +233,12 @@ class MediaFile {
   int? get parsedSeason => _parseEpisodeInfo(fileName).season;
   int? get parsedEpisode => _parseEpisodeInfo(fileName).episode;
   String? get parsedEpisodeTitle => _parseEpisodeInfo(fileName).episodeTitle;
-  bool get isVideo => ['mp4', 'mkv', 'mov', 'avi', 'webm'].contains(extension);
-  bool get isAudio =>
-      ['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a'].contains(extension);
+  bool get isVideo => [
+        'mp4', 'mkv', 'mov', 'avi', 'webm', 'wmv', 'flv', 'ts', 'm4v', '3gp', 'mpg', 'mpeg', 'vob', 'ogv', 'qt'
+      ].contains(extension);
+  bool get isAudio => [
+        'mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a', 'opus', 'wma', 'mka', 'm4p', 'aiff', 'alac'
+      ].contains(extension);
 
   String get durationFormatted {
     final hours = duration.inHours;
@@ -281,6 +295,10 @@ class MediaFile {
         'album': album,
         'trackNumber': trackNumber,
         'metadataTitle': metadataTitle,
+        'updatedAt': updatedAt.toIso8601String(),
+        'isDeleted': isDeleted,
+        'watchProgress': watchProgress,
+        'lastPlayed': lastPlayed?.toIso8601String(),
       };
 
   factory MediaFile.fromJson(Map<String, dynamic> json) => MediaFile(
@@ -333,9 +351,15 @@ class MediaFile {
         album: json['album'] as String?,
         trackNumber: json['trackNumber'] as int?,
         metadataTitle: json['metadataTitle'] as String?,
+        updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? DateTime.now(),
+        isDeleted: json['isDeleted'] as bool? ?? false,
+        watchProgress: (json['watchProgress'] as num?)?.toDouble() ?? 0.0,
+        lastPlayed: DateTime.tryParse(json['lastPlayed'] as String? ?? ''),
       );
 
   MediaFile copyWith({
+    String? filePath,
+    String? fileName,
     bool? isFavorite,
     ContentType? contentType,
     MediaKind? mediaKind,
@@ -374,14 +398,22 @@ class MediaFile {
     String? album,
     int? trackNumber,
     String? metadataTitle,
+    DateTime? updatedAt,
+    bool? isDeleted,
+    double? watchProgress,
+    DateTime? lastPlayed,
   }) {
     return MediaFile(
       id: id,
-      filePath: filePath,
-      fileName: fileName,
+      filePath: filePath ?? this.filePath,
+      fileName: fileName ?? this.fileName,
       thumbnailPath: thumbnailPath,
       duration: duration,
       addedAt: addedAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      isDeleted: isDeleted ?? this.isDeleted,
+      watchProgress: watchProgress ?? this.watchProgress,
+      lastPlayed: lastPlayed ?? this.lastPlayed,
       isFavorite: isFavorite ?? this.isFavorite,
       contentType: contentType ?? this.contentType,
       mediaKind: mediaKind ?? this.mediaKind,
@@ -521,6 +553,7 @@ class PlaybackSettings {
   bool enableIntro = true;
   bool enableMenuMusic = true;
   bool showNsfwTab = false;
+  bool showThemeParticles = true;
   bool keepScreenOn = true;
   String? movieStoragePath;
   String? tvShowStoragePath;
@@ -622,6 +655,7 @@ class PlaybackSettings {
         'autoOrganizeComics': autoOrganizeComics,
         'autoOrganizeEbooks': autoOrganizeEbooks,
         'particleTheme': particleTheme.index,
+        'showThemeParticles': showThemeParticles,
       };
 
   factory PlaybackSettings.fromJson(Map<String, dynamic> json) {
@@ -631,6 +665,7 @@ class PlaybackSettings {
     settings.autoOrganizeComics = json['autoOrganizeComics'] ?? false;
     settings.autoOrganizeEbooks = json['autoOrganizeEbooks'] ?? false;
     settings.particleTheme = ParticleTheme.values[json['particleTheme'] ?? 0];
+    settings.showThemeParticles = json['showThemeParticles'] ?? true;
     settings.volume = json['volume'] ?? 1.0;
     settings.playbackSpeed = json['playbackSpeed'] ?? 1.0;
     settings.useOllamaTranslation = json['useOllamaTranslation'] ?? true;

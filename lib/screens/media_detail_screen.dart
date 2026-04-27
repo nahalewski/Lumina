@@ -7,11 +7,13 @@ import 'package:cached_network_image/cached_network_image.dart';
 class MediaDetailScreen extends StatelessWidget {
   final MediaFile media;
   final List<MediaFile> library;
+  final VoidCallback? onPlay;
 
   const MediaDetailScreen({
     super.key,
     required this.media,
     this.library = const [],
+    this.onPlay,
   });
 
   @override
@@ -180,6 +182,7 @@ class MediaDetailScreen extends StatelessWidget {
                                     Provider.of<MediaProvider>(context,
                                             listen: false)
                                         .playMedia(media);
+                                    onPlay?.call();
                                     Navigator.pop(context);
                                   },
                                   icon: const Icon(Icons.play_arrow_rounded),
@@ -243,7 +246,11 @@ class MediaDetailScreen extends StatelessWidget {
                 ),
               if (related.isNotEmpty)
                 SliverToBoxAdapter(
-                  child: _RelatedLibraryRow(items: related, library: library),
+                  child: _RelatedLibraryRow(
+                    items: related,
+                    library: library,
+                    onPlay: onPlay,
+                  ),
                 ),
             ],
           ),
@@ -341,8 +348,13 @@ class _CreditsBlock extends StatelessWidget {
 class _RelatedLibraryRow extends StatelessWidget {
   final List<MediaFile> items;
   final List<MediaFile> library;
+  final VoidCallback? onPlay;
 
-  const _RelatedLibraryRow({required this.items, required this.library});
+  const _RelatedLibraryRow({
+    required this.items,
+    required this.library,
+    this.onPlay,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -372,15 +384,19 @@ class _RelatedLibraryRow extends StatelessWidget {
                 return SizedBox(
                   width: 122,
                   child: InkWell(
-                    onTap: () {
-                      Navigator.pushReplacement(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) =>
-                              MediaDetailScreen(media: item, library: library),
-                        ),
-                      );
-                    },
+                                  onTap: () {
+                                    Navigator.pushReplacement(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) =>
+                                            MediaDetailScreen(
+                                                media: item, 
+                                                library: library,
+                                                onPlay: onPlay,
+                                            ),
+                                      ),
+                                    );
+                                  },
                     borderRadius: BorderRadius.circular(8),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,

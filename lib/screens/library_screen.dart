@@ -6,12 +6,20 @@ import '../providers/media_provider.dart';
 import '../providers/subtitle_provider.dart';
 import 'media_detail_screen.dart';
 
-enum LibrarySection { movies, tv, music, nsfw }
+enum LibrarySection { home, movies, tv, music, nsfw }
 
 class LibraryScreen extends StatefulWidget {
   final VoidCallback? onPlayMedia;
   final LibrarySection? initialSection;
-  const LibraryScreen({super.key, this.onPlayMedia, this.initialSection});
+  final bool isNsfwUnlocked;
+  final bool showSegmentedControl;
+  const LibraryScreen({
+    super.key,
+    this.onPlayMedia,
+    this.initialSection,
+    this.isNsfwUnlocked = true,
+    this.showSegmentedControl = true,
+  });
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -30,7 +38,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   @override
   void initState() {
     super.initState();
-    _section = widget.initialSection ?? LibrarySection.movies;
+    _section = widget.initialSection ?? LibrarySection.home;
   }
 
   @override
@@ -66,6 +74,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
           children: [
             _Header(
               section: _section,
+              showSegmentedControl: widget.showSegmentedControl,
               movieCount: movies.length,
               showCount: shows.length,
               episodeCount: tvFiles.length,
@@ -74,6 +83,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
               isLoading: provider.isLoading,
               onSectionChanged: (section) {
                 provider.setFilter(LibraryFilter.all);
+                provider.setSearchQuery('');
+                _searchController.clear();
                 setState(() {
                   _section = section;
                   _selectedShow = null;
@@ -82,12 +93,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 });
               },
               onScan: provider.scanLibraryMetadata,
+              onRefresh: provider.scanAllFolders,
               onAdd: provider.pickMediaFiles,
             ),
             _SearchAndFilters(
               controller: _searchController,
               provider: provider,
               section: _section,
+              isNsfwUnlocked: widget.isNsfwUnlocked,
               hint: _section == LibrarySection.movies
                   ? 'Search movies, actors, genres, files...'
                   : _section == LibrarySection.tv
@@ -177,8 +190,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) =>
-            MediaDetailScreen(media: media, library: provider.mediaFiles),
+        builder: (context) => MediaDetailScreen(
+          media: media,
+          library: provider.mediaFiles,
+          onPlay: widget.onPlayMedia,
+        ),
       ),
     );
   }
@@ -239,8 +255,10 @@ class _Header extends StatelessWidget {
   final int musicCount;
   final int nsfwCount;
   final bool isLoading;
+  final bool showSegmentedControl;
   final ValueChanged<LibrarySection> onSectionChanged;
   final VoidCallback onScan;
+  final VoidCallback onRefresh;
   final VoidCallback onAdd;
 
   const _Header({
@@ -253,7 +271,9 @@ class _Header extends StatelessWidget {
     required this.isLoading,
     required this.onSectionChanged,
     required this.onScan,
+    required this.onRefresh,
     required this.onAdd,
+    this.showSegmentedControl = true,
   });
 
   @override
@@ -289,8 +309,7 @@ class _Header extends StatelessWidget {
             runSpacing: 10,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              if (section == LibrarySection.movies ||
-                  section == LibrarySection.tv)
+              if (showSegmentedControl)
                 _SegmentedLibraryTabs(
                     section: section, onChanged: onSectionChanged),
               _HeaderButton(
@@ -299,6 +318,21 @@ class _Header extends StatelessWidget {
                 onTap: onScan,
                 loading: isLoading,
               ),
+              _HeaderButton(
+                icon: Icons.sync_rounded,
+                label: 'Refresh Files',
+                onTap: onRefresh,
+                loading: isLoading,
+              ),
+              if (Theme.of(context).platform == TargetPlatform.android)
+                _HeaderButton(
+                  icon: Icons.cloud_download_rounded,
+                  label: 'Sync Now',
+                  onTap: () {
+                    Provider.of<MediaProvider>(context, listen: false).syncLibrary();
+                  },
+                  loading: isLoading,
+                ),
               _HeaderButton(
                 icon: Icons.add_rounded,
                 label: 'Add Files',
@@ -357,6 +391,12 @@ class _SegmentedLibraryTabs extends StatelessWidget {
       ),
       child: Row(
         children: [
+          _TabButton(
+            icon: Icons.home_rounded,
+            label: 'Home',
+            selected: section == LibrarySection.home,
+            onTap: () => onChanged(LibrarySection.home),
+          ),
           _TabButton(
             icon: Icons.movie_rounded,
             label: 'Movies',
@@ -429,12 +469,14 @@ class _SearchAndFilters extends StatelessWidget {
   final MediaProvider provider;
   final String hint;
   final LibrarySection section;
+  final bool isNsfwUnlocked;
 
   const _SearchAndFilters({
     required this.controller,
     required this.provider,
     required this.hint,
     required this.section,
+    required this.isNsfwUnlocked,
   });
 
   @override
@@ -503,54 +545,57 @@ class _SearchAndFilters extends StatelessWidget {
                       ),
                       _FilterChip(
                         label: 'Favorites',
-                        selected:
-                            provider.currentFilter == LibraryFilter.favorites,
-                        onSelected: () =>
-                            provider.setFilter(LibraryFilter.favorites),
+                        selected: provider.currentFilter == LibraryFilter.favorites,
+                        onSelected: () => provider.setFilter(LibraryFilter.favorites),
                       ),
-                      if (section != LibrarySection.music) ...[
+                      _FilterChip(
+                        label: 'New',
+                        selected: provider.currentFilter == LibraryFilter.recent,
+                        onSelected: () => provider.setFilter(LibraryFilter.recent),
+                      ),
+                      if (section == LibrarySection.music) ...[
                         _FilterChip(
-                          label: 'Watched',
-                          selected:
-                              provider.currentFilter == LibraryFilter.watched,
-                          onSelected: () =>
-                              provider.setFilter(LibraryFilter.watched),
+                          label: 'No Artwork',
+                          selected: provider.currentFilter == LibraryFilter.noArtwork,
+                          onSelected: () => provider.setFilter(LibraryFilter.noArtwork),
                         ),
                         _FilterChip(
-                          label: 'Unwatched',
-                          selected:
-                              provider.currentFilter == LibraryFilter.unwatched,
-                          onSelected: () =>
-                              provider.setFilter(LibraryFilter.unwatched),
+                          label: 'No Metadata',
+                          selected: provider.currentFilter == LibraryFilter.noMetadata,
+                          onSelected: () => provider.setFilter(LibraryFilter.noMetadata),
+                        ),
+                      ] else ...[
+                        _FilterChip(
+                          label: 'Unplayed',
+                          selected: provider.currentFilter == LibraryFilter.unplayed,
+                          onSelected: () => provider.setFilter(LibraryFilter.unplayed),
                         ),
                         _FilterChip(
-                          label: 'Processed',
-                          selected:
-                              provider.currentFilter == LibraryFilter.processed,
-                          onSelected: () =>
-                              provider.setFilter(LibraryFilter.processed),
+                          label: 'In Progress',
+                          selected: provider.currentFilter == LibraryFilter.inProgress,
+                          onSelected: () => provider.setFilter(LibraryFilter.inProgress),
+                        ),
+                        _FilterChip(
+                          label: '4K',
+                          selected: provider.currentFilter == LibraryFilter.fourK,
+                          onSelected: () => provider.setFilter(LibraryFilter.fourK),
+                        ),
+                        _FilterChip(
+                          label: 'No Artwork',
+                          selected: provider.currentFilter == LibraryFilter.noArtwork,
+                          onSelected: () => provider.setFilter(LibraryFilter.noArtwork),
                         ),
                         _FilterChip(
                           label: 'Anime',
-                          selected:
-                              provider.currentFilter == LibraryFilter.anime,
-                          onSelected: () =>
-                              provider.setFilter(LibraryFilter.anime),
+                          selected: provider.currentFilter == LibraryFilter.anime,
+                          onSelected: () => provider.setFilter(LibraryFilter.anime),
                         ),
-                        _FilterChip(
-                          label: 'Hentai',
-                          selected:
-                              provider.currentFilter == LibraryFilter.hentai,
-                          onSelected: () =>
-                              provider.setFilter(LibraryFilter.hentai),
-                        ),
-                        _FilterChip(
-                          label: 'General',
-                          selected:
-                              provider.currentFilter == LibraryFilter.general,
-                          onSelected: () =>
-                              provider.setFilter(LibraryFilter.general),
-                        ),
+                        if (isNsfwUnlocked)
+                          _FilterChip(
+                            label: 'Adult',
+                            selected: provider.currentFilter == LibraryFilter.hentai,
+                            onSelected: () => provider.setFilter(LibraryFilter.hentai),
+                          ),
                       ],
                     ],
                   ),
@@ -712,7 +757,7 @@ class _ShowsGrid extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),
       gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
         maxCrossAxisExtent: 220,
-        mainAxisExtent: 336,
+        mainAxisExtent: 354, // Matched with _MoviesGrid
         crossAxisSpacing: 24,
         mainAxisSpacing: 24,
       ),
@@ -721,14 +766,18 @@ class _ShowsGrid extends StatelessWidget {
         final title = titles[index];
         final episodes = shows[title]!;
         final seasons = episodes.map((e) => e.season ?? 1).toSet().length;
+        final representative = episodes.firstWhere(
+            (e) => e.posterUrl != null || e.coverArtUrl != null,
+            orElse: () => episodes.first);
+
         return _ShowCard(
           title: title,
           episodes: episodes.length,
           seasons: seasons,
-          coverUrl: episodes.first.posterUrl ?? episodes.first.coverArtUrl,
+          coverUrl: representative.posterUrl ?? representative.coverArtUrl,
           onTap: () => onOpenShow(title),
-          onDelete: () => onDelete(episodes.first),
-          representativeMedia: episodes.first,
+          onDelete: () => onDelete(representative),
+          representativeMedia: representative,
         );
       },
     );
@@ -758,64 +807,111 @@ class _ShowDetailView extends StatelessWidget {
     for (final episode in episodes) {
       seasons.putIfAbsent(episode.season ?? 1, () => []).add(episode);
     }
-    final first = episodes.isEmpty ? null : episodes.first;
+    final representative = episodes.firstWhere(
+        (e) => e.backdropUrl != null || e.posterUrl != null,
+        orElse: () => episodes.first);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Stack(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(32, 24, 32, 16),
-          child: Row(
-            children: [
-              IconButton(
-                icon: const Icon(
-                  Icons.arrow_back_ios_new_rounded,
-                  color: Colors.white,
-                ),
-                onPressed: onBack,
+        // Backdrop
+        if (representative.backdropUrl != null)
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 300,
+            child: ShaderMask(
+              shaderCallback: (rect) => LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Colors.black, Colors.transparent],
+              ).createShader(rect),
+              blendMode: BlendMode.dstIn,
+              child: CachedNetworkImage(
+                imageUrl: representative.backdropUrl!,
+                fit: BoxFit.cover,
+                errorWidget: (_, __, ___) => const SizedBox.shrink(),
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      showTitle,
-                      style: const TextStyle(
-                        fontFamily: 'Manrope',
-                        fontSize: 26,
-                        fontWeight: FontWeight.w800,
-                        color: Colors.white,
-                      ),
-                    ),
-                    Text(
-                      '${seasons.length} seasons | ${episodes.length} episodes',
-                      style: const TextStyle(
-                        color: Colors.white38,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (first?.rating != null)
-                _MetaPill(
-                  icon: Icons.star_rounded,
-                  label: first!.rating!.toStringAsFixed(1),
-                ),
-              if (first?.releaseYear != null)
-                _MetaPill(
-                  icon: Icons.calendar_month_rounded,
-                  label: first!.releaseYear.toString(),
-                ),
-            ],
+            ),
           ),
-        ),
-        if (first?.synopsis != null)
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(32, 24, 32, 16),
+              child: Row(
+                children: [
+                  Material(
+                    color: Colors.white.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(12),
+                    child: IconButton(
+                      icon: const Icon(
+                        Icons.arrow_back_ios_new_rounded,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                      onPressed: onBack,
+                    ),
+                  ),
+                  const SizedBox(width: 20),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          showTitle,
+                          style: const TextStyle(
+                            fontFamily: 'Manrope',
+                            fontSize: 32,
+                            fontWeight: FontWeight.w900,
+                            color: Colors.white,
+                            letterSpacing: -0.5,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            Text(
+                              '${seasons.length} seasons | ${episodes.length} episodes',
+                              style: TextStyle(
+                                color: const Color(0xFFE9B3FF).withValues(alpha: 0.8),
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            if (representative.genres.isNotEmpty) ...[
+                              const SizedBox(width: 8),
+                              Text(
+                                '|  ${representative.genres.take(3).join('  •  ')}',
+                                style: const TextStyle(
+                                  color: Colors.white38,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (representative.rating != null)
+                    _MetaPill(
+                      icon: Icons.star_rounded,
+                      label: representative.rating!.toStringAsFixed(1),
+                    ),
+                  if (representative.releaseYear != null)
+                    _MetaPill(
+                      icon: Icons.calendar_month_rounded,
+                      label: representative.releaseYear.toString(),
+                    ),
+                ],
+              ),
+            ),
+        if (representative.synopsis != null)
           Padding(
             padding: const EdgeInsets.fromLTRB(32, 0, 32, 16),
             child: Text(
-              first!.synopsis!,
+              representative.synopsis!,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
@@ -840,7 +936,9 @@ class _ShowDetailView extends StatelessWidget {
           ),
         ),
       ],
-    );
+    ),
+  ],
+);
   }
 }
 
@@ -966,6 +1064,7 @@ class _ShowCard extends StatelessWidget {
   final String? coverUrl;
   final VoidCallback onTap;
   final VoidCallback onDelete;
+  final MediaFile? representativeMedia;
 
   const _ShowCard({
     required this.title,
@@ -977,14 +1076,12 @@ class _ShowCard extends StatelessWidget {
     this.representativeMedia,
   });
 
-  final MediaFile? representativeMedia;
-
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onSecondaryTapDown: (details) {
         _showContextMenu(context, details.globalPosition, onDelete,
-            media: representativeMedia);
+            media: representativeMedia, showGroupKey: title);
       },
       child: InkWell(
         onTap: onTap,
@@ -993,7 +1090,23 @@ class _ShowCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(
-              child: _ArtworkFrame(imageUrl: coverUrl, icon: Icons.tv_rounded),
+              child: _ArtworkFrame(
+                imageUrl: coverUrl,
+                icon: Icons.tv_rounded,
+                child: Stack(
+                  children: [
+                    if (representativeMedia?.rating != null)
+                      Positioned(
+                        top: 8,
+                        right: 8,
+                        child: _MetaPill(
+                          icon: Icons.star_rounded,
+                          label: representativeMedia!.rating!.toStringAsFixed(1),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
             ),
             const SizedBox(height: 10),
             Text(
@@ -1008,8 +1121,18 @@ class _ShowCard extends StatelessWidget {
             ),
             Text(
               '$seasons seasons | $episodes episodes',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(color: Colors.white38, fontSize: 12),
             ),
+            if (representativeMedia?.genres != null &&
+                representativeMedia!.genres.isNotEmpty)
+              Text(
+                representativeMedia!.genres.take(2).join(' | '),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Color(0xFFAAC7FF), fontSize: 11),
+              ),
           ],
         ),
       ),
@@ -1037,16 +1160,28 @@ class _ArtworkFrame extends StatelessWidget {
             : null,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.22),
-            blurRadius: 12,
-            offset: const Offset(0, 6),
+            color: Colors.black.withValues(alpha: 0.3),
+            blurRadius: 15,
+            offset: const Offset(0, 8),
+          ),
+          // Subtle Sakura Purple Glow
+          BoxShadow(
+            color: const Color(0xFFE9B3FF).withValues(alpha: 0.1),
+            blurRadius: 20,
+            spreadRadius: -5,
           ),
         ],
       ),
       child: Stack(
         children: [
           if (imageUrl == null)
-            Center(child: Icon(icon, size: 48, color: Colors.white10)),
+            Center(
+              child: Icon(
+                icon,
+                size: 48,
+                color: const Color(0xFFE9B3FF).withValues(alpha: 0.15),
+              ),
+            ),
           if (child != null) child!,
         ],
       ),
@@ -1130,8 +1265,9 @@ class _EpisodeTile extends StatelessWidget {
         'S${season.toString().padLeft(2, '0')}E${ep.toString().padLeft(2, '0')}';
     final title =
         episode.episodeTitle ?? episode.parsedEpisodeTitle ?? episode.fileName;
+    
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.only(bottom: 12),
       child: GestureDetector(
         onSecondaryTapDown: (details) {
           _showContextMenu(context, details.globalPosition, onDelete,
@@ -1139,49 +1275,71 @@ class _EpisodeTile extends StatelessWidget {
         },
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(16),
           child: Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
               color: Colors.white.withValues(alpha: 0.035),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: episode.watchProgress > 0 
+                  ? const Color(0xFFE9B3FF).withValues(alpha: 0.2)
+                  : Colors.white.withValues(alpha: 0.06),
+              ),
             ),
             child: Row(
               children: [
                 _EpisodeThumb(episode: episode, code: code),
-                const SizedBox(width: 14),
+                const SizedBox(width: 16),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        '$code - $title',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                        ),
+                      Row(
+                        children: [
+                          Text(
+                            code,
+                            style: const TextStyle(
+                              color: Color(0xFFE9B3FF),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 1,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
+                      const SizedBox(height: 4),
                       Text(
                         [
                           if (episode.airDate != null) episode.airDate!,
                           episode.durationFormatted,
                           if (episode.rating != null)
-                            '${episode.rating!.toStringAsFixed(1)} rating',
+                            '★ ${episode.rating!.toStringAsFixed(1)}',
                           if (episode.resolution != null) episode.resolution!,
-                          if (episode.language != null) episode.language!,
-                        ].join(' | '),
+                        ].join('  •  '),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: Colors.white38,
                           fontSize: 11,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
-                      if (episode.synopsis != null)
+                      if (episode.synopsis != null) ...[
+                        const SizedBox(height: 6),
                         Text(
                           episode.synopsis!,
                           maxLines: 1,
@@ -1189,22 +1347,39 @@ class _EpisodeTile extends StatelessWidget {
                           style: const TextStyle(
                             color: Colors.white54,
                             fontSize: 12,
+                            height: 1.3,
                           ),
                         ),
+                      ],
+                      if (episode.watchProgress > 0 && episode.watchProgress < 0.95) ...[
+                        const SizedBox(height: 10),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(2),
+                          child: LinearProgressIndicator(
+                            value: episode.watchProgress,
+                            backgroundColor: Colors.white.withValues(alpha: 0.05),
+                            valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFE9B3FF)),
+                            minHeight: 3,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
+                const SizedBox(width: 8),
                 IconButton(
                   onPressed: onAddToQueue,
                   icon: Icon(
                     Icons.queue_rounded,
-                    color: Colors.white.withValues(alpha: 0.45),
+                    color: Colors.white.withValues(alpha: 0.35),
                     size: 20,
                   ),
+                  tooltip: 'Add to Queue',
                 ),
-                const Icon(
-                  Icons.play_circle_fill_rounded,
-                  color: Colors.white24,
+                const SizedBox(width: 4),
+                Icon(
+                  Icons.play_circle_outline_rounded,
+                  color: const Color(0xFFE9B3FF).withValues(alpha: 0.4),
                   size: 32,
                 ),
               ],
@@ -1593,39 +1768,7 @@ class _ArtistGridState extends State<_ArtistGrid> {
                   )),
               const SizedBox(height: 24),
             ],
-            if (hasSearch && (ytResults.isNotEmpty || isSearchingYt)) ...[
-              const _SubHeader(title: 'From YouTube'),
-              const SizedBox(height: 12),
-              if (isSearchingYt)
-                const Center(
-                    child: Padding(
-                        padding: EdgeInsets.all(20),
-                        child: CircularProgressIndicator()))
-              else
-                ...ytResults.map((yt) => _YoutubeResultTile(
-                      result: yt,
-                      onDownload: () => provider.downloadAndAddMusic(yt),
-                    )),
-              const SizedBox(height: 32),
-            ],
-
-            // ── Featured American Artists ────────────────────────────────
-            if (_discoveryArtists.isNotEmpty) ...[
-              const _SubHeader(title: 'Featured Artists'),
-              const SizedBox(height: 16),
-              buildArtistGrid(
-                _discoveryArtists,
-                onTap: widget.onArtistSelected,
-              ),
-              const SizedBox(height: 32),
-            ] else if (_isLoadingDiscovery) ...[
-              const _SubHeader(title: 'Featured Artists'),
-              const SizedBox(height: 20),
-              const Center(child: CircularProgressIndicator()),
-              const SizedBox(height: 32),
-            ],
-
-            // ── Your Artists ─────────────────────────────────────────────
+            // ── Your Artists (LOCAL FIRST) ───────────────────────────────
             if (localArtists.isNotEmpty) ...[
               const _SubHeader(title: 'Your Artists'),
               const SizedBox(height: 16),
@@ -1643,7 +1786,53 @@ class _ArtistGridState extends State<_ArtistGrid> {
                     onAddToQueue: () => widget.onQueue(song),
                     onDelete: () => widget.onDelete(song),
                   )),
+              const SizedBox(height: 48),
             ],
+
+            // ── YouTube Search Results ───────────────────────────────────
+            if (hasSearch && (ytResults.isNotEmpty || isSearchingYt)) ...[
+              const _SubHeader(title: 'From YouTube'),
+              const SizedBox(height: 12),
+              if (isSearchingYt)
+                const Center(
+                    child: Padding(
+                        padding: EdgeInsets.all(20),
+                        child: CircularProgressIndicator()))
+              else
+                ...ytResults.map((yt) => _YoutubeResultTile(
+                      result: yt,
+                      onDownload: () => provider.downloadAndAddMusic(yt),
+                    )),
+              const SizedBox(height: 32),
+            ],
+
+            // ── Featured American Artists (Discovery) ────────────────────
+            if (_discoveryArtists.isNotEmpty) ...[
+              const _SubHeader(title: 'Featured Artists'),
+              const SizedBox(height: 16),
+              buildArtistGrid(
+                _discoveryArtists,
+                onTap: widget.onArtistSelected,
+              ),
+              const SizedBox(height: 32),
+            ] else if (_isLoadingDiscovery) ...[
+              const _SubHeader(title: 'Featured Artists'),
+              const SizedBox(height: 20),
+              const Center(child: CircularProgressIndicator()),
+              const SizedBox(height: 32),
+            ],
+            if (localArtists.isEmpty && 
+                widget.music.isEmpty && 
+                !hasSearch && 
+                !_isLoadingDiscovery && 
+                _discoveryArtists.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 100),
+                child: _EmptyState(
+                  title: 'No music found',
+                  body: 'Add a music folder in Settings to see your collection here.',
+                ),
+              ),
           ],
         );
       },
@@ -1719,6 +1908,7 @@ class _AlbumGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final provider = Provider.of<MediaProvider>(context);
+    final localAlbums = provider.getLocalAlbums(artistName);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1745,13 +1935,16 @@ class _AlbumGrid extends StatelessWidget {
           child: FutureBuilder<List<Map<String, dynamic>>>(
             future: provider.getArtistAlbums(artistName),
             builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
+              final spotifyAlbums = snapshot.data ?? [];
+              final allAlbums = [...localAlbums, ...spotifyAlbums.where((s) => !localAlbums.any((l) => l['name'] == s['name']))];
+              
+              if (snapshot.connectionState == ConnectionState.waiting && localAlbums.isEmpty) {
                 return const Center(child: CircularProgressIndicator());
               }
-              final albums = snapshot.data ?? [];
-              if (albums.isEmpty) {
+              
+              if (allAlbums.isEmpty) {
                 return const Center(
-                    child: Text('No albums found on Spotify',
+                    child: Text('No albums found',
                         style: TextStyle(color: Colors.white38)));
               }
               return GridView.builder(
@@ -1762,9 +1955,9 @@ class _AlbumGrid extends StatelessWidget {
                   crossAxisSpacing: 20,
                   mainAxisSpacing: 20,
                 ),
-                itemCount: albums.length,
+                itemCount: allAlbums.length,
                 itemBuilder: (context, index) {
-                  final album = albums[index];
+                  final album = allAlbums[index];
                   return InkWell(
                     onTap: () => onAlbumSelected(album),
                     borderRadius: BorderRadius.circular(12),
@@ -2364,7 +2557,7 @@ class _MusicPlayerBar extends StatelessWidget {
 }
 
 void _showContextMenu(BuildContext context, Offset position, VoidCallback onDelete,
-    {MediaFile? media}) {
+    {MediaFile? media, String? showGroupKey}) {
   final provider = Provider.of<MediaProvider>(context, listen: false);
   showMenu(
     context: context,
@@ -2378,6 +2571,24 @@ void _showContextMenu(BuildContext context, Offset position, VoidCallback onDele
     elevation: 8,
     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
     items: [
+      if (media != null)
+        PopupMenuItem(
+          onTap: () {
+            Future.microtask(() => showDialog(
+              context: context,
+              builder: (_) => _FixMatchDialog(
+                  media: media, showGroupKey: showGroupKey),
+            ));
+          },
+          child: const Row(
+            children: [
+              Icon(Icons.manage_search_rounded, color: Color(0xFFAAC7FF), size: 18),
+              SizedBox(width: 10),
+              Text('Fix Match...',
+                  style: TextStyle(color: Color(0xFFAAC7FF), fontSize: 13)),
+            ],
+          ),
+        ),
       if (media != null)
         PopupMenuItem(
           onTap: () => provider.refreshMetadata(media),
@@ -2404,6 +2615,308 @@ void _showContextMenu(BuildContext context, Offset position, VoidCallback onDele
       ),
     ],
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//                          Fix Match Dialog
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _FixMatchDialog extends StatefulWidget {
+  final MediaFile media;
+  final String? showGroupKey;
+  const _FixMatchDialog({required this.media, this.showGroupKey});
+
+  @override
+  State<_FixMatchDialog> createState() => _FixMatchDialogState();
+}
+
+class _FixMatchDialogState extends State<_FixMatchDialog> {
+  late final TextEditingController _searchCtrl;
+  List<Map<String, dynamic>> _results = [];
+  bool _loading = false;
+  bool _applied = false;
+  String? _errorMsg;
+
+  late final String _type;
+
+  @override
+  void initState() {
+    super.initState();
+    _type = widget.media.mediaKind == MediaKind.tv ? 'tv' : 'movie';
+    final initialQuery = widget.media.showTitle ??
+        widget.media.movieTitle ??
+        widget.media.libraryTitle;
+    _searchCtrl = TextEditingController(text: initialQuery);
+    _search(initialQuery);
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _search(String query) async {
+    if (query.trim().isEmpty) {
+      setState(() { _results = []; _errorMsg = null; });
+      return;
+    }
+    setState(() { _loading = true; _errorMsg = null; });
+    final provider = Provider.of<MediaProvider>(context, listen: false);
+    try {
+      final results = await provider.searchTmdbForMatch(query.trim(), type: _type);
+      if (mounted) setState(() { _results = results; _loading = false; });
+    } catch (e) {
+      if (mounted) setState(() { _loading = false; _errorMsg = 'Search failed. Check your TMDB API key.'; });
+    }
+  }
+
+  Future<void> _applyMatch(Map<String, dynamic> result) async {
+    setState(() { _loading = true; });
+    final provider = Provider.of<MediaProvider>(context, listen: false);
+    final nav = Navigator.of(context);
+    await provider.applyManualMatch(widget.media, result,
+        showGroupKey: widget.showGroupKey);
+    if (!mounted) return;
+    setState(() { _applied = true; _loading = false; });
+    await Future.delayed(const Duration(milliseconds: 800));
+    nav.pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isTV = _type == 'tv';
+    return Dialog(
+      backgroundColor: const Color(0xFF1A1A1E),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 560, maxHeight: 640),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 20, 16, 8),
+              child: Row(
+                children: [
+                  const Icon(Icons.manage_search_rounded,
+                      color: Color(0xFFAAC7FF), size: 22),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Fix Match',
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 17,
+                                fontWeight: FontWeight.w700)),
+                        Text(
+                          'Searching TMDB ${isTV ? 'TV Shows' : 'Movies'}',
+                          style: const TextStyle(
+                              color: Colors.white38, fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close_rounded,
+                        color: Colors.white38, size: 20),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ],
+              ),
+            ),
+            // Current title hint
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Text(
+                'Currently matched: ${widget.media.showTitle ?? widget.media.movieTitle ?? widget.media.libraryTitle}',
+                style: const TextStyle(color: Colors.white54, fontSize: 12),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(height: 12),
+            // Search field
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: TextField(
+                controller: _searchCtrl,
+                autofocus: true,
+                style: const TextStyle(color: Colors.white, fontSize: 14),
+                decoration: InputDecoration(
+                  hintText: isTV ? 'Search TV shows...' : 'Search movies...',
+                  hintStyle: const TextStyle(color: Colors.white30),
+                  prefixIcon: const Icon(Icons.search_rounded,
+                      color: Colors.white30, size: 20),
+                  suffixIcon: _loading
+                      ? const Padding(
+                          padding: EdgeInsets.all(12),
+                          child: SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Color(0xFFAAC7FF))),
+                        )
+                      : null,
+                  filled: true,
+                  fillColor: Colors.white10,
+                  contentPadding: const EdgeInsets.symmetric(
+                      vertical: 10, horizontal: 14),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide.none),
+                ),
+                onSubmitted: _search,
+                textInputAction: TextInputAction.search,
+              ),
+            ),
+            const SizedBox(height: 4),
+            // Error
+            if (_errorMsg != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+                child: Text(_errorMsg!,
+                    style: const TextStyle(
+                        color: Colors.redAccent, fontSize: 12)),
+              ),
+            // Applied success
+            if (_applied)
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+                child: Row(
+                  children: [
+                    Icon(Icons.check_circle_outline_rounded,
+                        color: Colors.greenAccent, size: 16),
+                    SizedBox(width: 6),
+                    Text('Match applied!',
+                        style: TextStyle(
+                            color: Colors.greenAccent, fontSize: 13)),
+                  ],
+                ),
+              ),
+            const Divider(color: Colors.white12, height: 16),
+            // Results list
+            Expanded(
+              child: _results.isEmpty && !_loading
+                  ? const Center(
+                      child: Text('No results. Try a different search.',
+                          style: TextStyle(color: Colors.white38, fontSize: 13)),
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      itemCount: _results.length,
+                      itemBuilder: (context, i) {
+                        final r = _results[i];
+                        final year = (r['releaseDate'] as String?)
+                                ?.split('-')
+                                .first ??
+                            '';
+                        final posterUrl = r['posterUrl'] as String?;
+                        return InkWell(
+                          onTap: _loading ? null : () => _applyMatch(r),
+                          borderRadius: BorderRadius.circular(8),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 6),
+                            child: Row(
+                              children: [
+                                // Poster thumbnail
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(6),
+                                  child: SizedBox(
+                                    width: 48,
+                                    height: 72,
+                                    child: posterUrl != null
+                                        ? CachedNetworkImage(
+                                            imageUrl: posterUrl,
+                                            fit: BoxFit.cover,
+                                            memCacheWidth: 96,
+                                            memCacheHeight: 144,
+                                            placeholder: (_, __) => Container(
+                                                color: Colors.white10),
+                                            errorWidget: (_, __, ___) =>
+                                                Container(
+                                                    color: Colors.white10,
+                                                    child: const Icon(
+                                                        Icons
+                                                            .image_not_supported_outlined,
+                                                        color: Colors.white24,
+                                                        size: 20)),
+                                          )
+                                        : Container(
+                                            color: Colors.white10,
+                                            child: const Icon(
+                                                Icons.movie_creation_outlined,
+                                                color: Colors.white24,
+                                                size: 20)),
+                                  ),
+                                ),
+                                const SizedBox(width: 14),
+                                // Info
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        r['title'] as String? ?? '',
+                                        style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w600),
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      if (year.isNotEmpty)
+                                        Text(year,
+                                            style: const TextStyle(
+                                                color: Colors.white38,
+                                                fontSize: 12)),
+                                      if ((r['overview'] as String?)
+                                              ?.isNotEmpty ==
+                                          true)
+                                        Padding(
+                                          padding:
+                                              const EdgeInsets.only(top: 2),
+                                          child: Text(
+                                            r['overview'] as String,
+                                            style: const TextStyle(
+                                                color: Colors.white30,
+                                                fontSize: 11),
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                const Icon(Icons.check_circle_outline_rounded,
+                                    color: Colors.white24, size: 18),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+            // Footer
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+              child: Text(
+                'Tap a result to apply it${isTV ? ' to all episodes of this show' : ''}.',
+                style:
+                    const TextStyle(color: Colors.white24, fontSize: 11),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _SuggestionTile extends StatelessWidget {

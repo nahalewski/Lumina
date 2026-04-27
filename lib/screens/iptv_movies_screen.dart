@@ -5,7 +5,7 @@ import '../providers/iptv_provider.dart';
 import '../services/iptv_service.dart';
 import 'iptv_player_screen.dart';
 
-/// IPTV Movies screen - organized by genre/category
+/// IPTV Movies screen - Redesigned to match movie.png & movie2.png
 class IptvMoviesScreen extends StatefulWidget {
   const IptvMoviesScreen({super.key});
 
@@ -17,338 +17,372 @@ class _IptvMoviesScreenState extends State<IptvMoviesScreen> {
   String _searchQuery = '';
   String? _selectedGenre;
 
-  Future<void> _playMovie(IptvMedia movie) async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => IptvPlayerScreen(media: movie),
-      ),
-    );
-  }
-
-  String _cleanGenre(String group) {
-    String cleaned = group
-        .replaceAll(RegExp(r'^MOVIE\s*[-:]\s*', caseSensitive: false), '')
-        .replaceAll(RegExp(r'^VOD\s*[-:]\s*', caseSensitive: false), '')
-        .replaceAll(RegExp(r'^MOVIES\s*[-:]\s*', caseSensitive: false), '')
-        .replaceAll(RegExp(r'^IPTV\s*[-:]\s*', caseSensitive: false), '')
-        .trim();
-    if (cleaned.isEmpty ||
-        cleaned.toLowerCase() == 'movie' ||
-        cleaned.toLowerCase() == 'vod' ||
-        cleaned.toLowerCase() == 'movies') {
-      return 'All Movies';
-    }
-    return cleaned;
-  }
-
-  IconData _genreIcon(String genre) {
-    final g = genre.toLowerCase();
-    if (g.contains('recent')) return Icons.auto_awesome_rounded;
-    if (g.contains('action') ||
-        g.contains('adventure') ||
-        g.contains('thriller')) return Icons.flash_on_rounded;
-    if (g.contains('horror') || g.contains('scary') || g.contains('terror'))
-      return Icons.dangerous_rounded;
-    if (g.contains('comedy') || g.contains('funny') || g.contains('humor'))
-      return Icons.emoji_emotions_rounded;
-    if (g.contains('drama') || g.contains('romance') || g.contains('love'))
-      return Icons.favorite_rounded;
-    if (g.contains('sci-fi') ||
-        g.contains('sci fi') ||
-        g.contains('science') ||
-        g.contains('fantasy')) return Icons.rocket_launch_rounded;
-    if (g.contains('documentary') || g.contains('docu'))
-      return Icons.menu_book_rounded;
-    if (g.contains('animation') ||
-        g.contains('cartoon') ||
-        g.contains('anime') ||
-        g.contains('kids') ||
-        g.contains('family') ||
-        g.contains('children')) return Icons.child_care_rounded;
-    return Icons.movie_rounded;
-  }
-
-  Color _genreColor(String genre) {
-    final g = genre.toLowerCase();
-    if (g.contains('recent')) return const Color(0xFFE9B3FF);
-    if (g.contains('action')) return const Color(0xFFFF4444);
-    if (g.contains('horror')) return const Color(0xFF6B1D1D);
-    if (g.contains('comedy')) return const Color(0xFFFFB347);
-    if (g.contains('drama') || g.contains('romance'))
-      return const Color(0xFFFF6B9D);
-    if (g.contains('sci-fi') || g.contains('fantasy'))
-      return const Color(0xFF7B68EE);
-    return const Color(0xFFE9B3FF);
-  }
-
   @override
   Widget build(BuildContext context) {
     return Consumer<IptvProvider>(
       builder: (context, provider, _) {
+        if (provider.isLoading) {
+          return const Center(child: CircularProgressIndicator(color: Color(0xFFE9B3FF)));
+        }
+
         final movies = provider.movies;
         final recentMovies = provider.recentlyAddedMovies;
+        
+        // Mock trending (top 10 from all movies)
+        final trendingMovies = movies.take(10).toList();
 
-        var filtered = movies;
-        if (_searchQuery.isNotEmpty) {
-          filtered = filtered
-              .where((m) =>
-                  m.name.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-                  m.group.toLowerCase().contains(_searchQuery.toLowerCase()))
-              .toList();
-        }
-
-        final Map<String, List<IptvMedia>> genreMap = {};
-        for (final movie in filtered) {
-          final genre = _cleanGenre(movie.group);
-          genreMap.putIfAbsent(genre, () => []);
-          genreMap[genre]!.add(movie);
-        }
-
+        final filtered = _applyFilters(movies);
+        final genreMap = _groupMoviesByGenre(filtered);
         final sortedGenres = genreMap.keys.toList()..sort();
-        final genreTabs = ['All', ...sortedGenres];
 
-        return Column(
-          children: [
-            // Header
-            Padding(
-              padding: const EdgeInsets.fromLTRB(32, 24, 32, 8),
-              child: Row(
-                children: [
-                  Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFE9B3FF).withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Icon(Icons.movie_rounded,
-                        color: Color(0xFFE9B3FF), size: 22),
-                  ),
-                  const SizedBox(width: 16),
-                  const Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Movies',
-                          style: TextStyle(
-                              fontFamily: 'Manrope',
-                              fontSize: 28,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white)),
-                      Text('IPTV Video on Demand',
-                          style:
-                              TextStyle(color: Colors.white38, fontSize: 12)),
-                    ],
-                  ),
-                  const Spacer(),
-                  IconButton(
-                    icon: const Icon(Icons.refresh_rounded,
-                        color: Colors.white54),
-                    onPressed: () => provider.loadMedia(),
-                  ),
-                ],
-              ),
-            ),
-            // Search
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 8),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.05),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: TextField(
-                  style: const TextStyle(color: Colors.white),
-                  decoration: const InputDecoration(
-                    hintText: 'Search movies...',
-                    prefixIcon: Icon(Icons.search, color: Colors.white24),
-                    border: InputBorder.none,
-                    contentPadding: EdgeInsets.symmetric(vertical: 12),
-                  ),
+        return Container(
+          color: const Color(0xFF0D0B0F),
+          child: CustomScrollView(
+            physics: const BouncingScrollPhysics(),
+            slivers: [
+              // Search & Header
+              SliverToBoxAdapter(
+                child: _SearchHeader(
                   onChanged: (v) => setState(() => _searchQuery = v),
                 ),
               ),
-            ),
-            SizedBox(
-              height: 38,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 32),
-                itemCount: genreTabs.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 8),
-                itemBuilder: (context, index) {
-                  final genre = genreTabs[index];
-                  final isActive = (_selectedGenre == null && genre == 'All') ||
-                      _selectedGenre == genre;
-                  return Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: () => setState(
-                        () => _selectedGenre = genre == 'All' ? null : genre,
-                      ),
-                      borderRadius: BorderRadius.circular(15),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 13, vertical: 7),
-                        decoration: BoxDecoration(
-                          color: isActive
-                              ? const Color(0xFFE9B3FF).withValues(alpha: 0.18)
-                              : Colors.white.withValues(alpha: 0.06),
-                          borderRadius: BorderRadius.circular(15),
-                          border: Border.all(
-                            color: isActive
-                                ? const Color(0xFFE9B3FF)
-                                    .withValues(alpha: 0.35)
-                                : Colors.white.withValues(alpha: 0.08),
-                          ),
-                        ),
-                        child: Text(
-                          genre,
-                          style: TextStyle(
-                            color: isActive
-                                ? const Color(0xFFE9B3FF)
-                                : Colors.white.withValues(alpha: 0.7),
-                            fontSize: 12,
-                            fontWeight:
-                                isActive ? FontWeight.w700 : FontWeight.w500,
-                          ),
-                        ),
-                      ),
+
+              if (_searchQuery.isEmpty && _selectedGenre == null) ...[
+                // Trending Section (Numerical Index)
+                SliverToBoxAdapter(
+                  child: _HorizontalSection(
+                    title: 'Trending movies',
+                    itemCount: trendingMovies.length,
+                    height: 220,
+                    itemBuilder: (context, index) => _TrendingCard(
+                      movie: trendingMovies[index],
+                      rank: index + 1,
                     ),
-                  );
-                },
-              ),
-            ),
-            const SizedBox(height: 8),
-            // Content
-            Expanded(
-              child: provider.isLoading
-                  ? const Center(
-                      child:
-                          CircularProgressIndicator(color: Color(0xFFE9B3FF)))
-                  : CustomScrollView(
-                      slivers: [
-                        // Recently Added Section (Only if no search/filter)
-                        if (_searchQuery.isEmpty &&
-                            _selectedGenre == null &&
-                            recentMovies.isNotEmpty)
-                          SliverToBoxAdapter(
-                            child: _buildGenreSection(
-                                'Recently Added', recentMovies),
-                          ),
-                        // Genres
-                        SliverPadding(
-                          padding: const EdgeInsets.symmetric(horizontal: 32),
-                          sliver: SliverList(
-                            delegate: SliverChildBuilderDelegate(
-                              (context, index) {
-                                final genre = sortedGenres[index];
-                                final genreMovies = genreMap[genre]!;
-                                if (_selectedGenre != null &&
-                                    genre != _selectedGenre) {
-                                  return const SizedBox.shrink();
-                                }
-                                return _buildGenreSection(genre, genreMovies,
-                                    wrapInPadding: false);
-                              },
-                              childCount: sortedGenres.length,
-                            ),
-                          ),
-                        ),
-                      ],
+                  ),
+                ),
+
+                // Recently Added Section
+                SliverToBoxAdapter(
+                  child: _HorizontalSection(
+                    title: 'Recently added',
+                    itemCount: recentMovies.length,
+                    itemBuilder: (context, index) => _MovieCard(
+                      movie: recentMovies[index],
+                      showProgress: true,
                     ),
-            ),
-          ],
+                    onViewAll: () => setState(() => _selectedGenre = 'Recently Added'),
+                  ),
+                ),
+              ],
+
+              // Genre Sections
+              ...sortedGenres.map((genre) {
+                final genreMovies = genreMap[genre]!;
+                if (_selectedGenre != null && _selectedGenre != genre) return const SliverToBoxAdapter(child: SizedBox.shrink());
+                
+                return SliverToBoxAdapter(
+                  child: _HorizontalSection(
+                    title: genre,
+                    itemCount: genreMovies.length,
+                    itemBuilder: (context, index) => _MovieCard(movie: genreMovies[index]),
+                    onViewAll: () => setState(() => _selectedGenre = genre),
+                  ),
+                );
+              }),
+              
+              const SliverToBoxAdapter(child: SizedBox(height: 100)),
+            ],
+          ),
         );
       },
     );
   }
 
-  Widget _buildGenreSection(String genre, List<IptvMedia> movies,
-      {bool wrapInPadding = true}) {
-    Widget content = Padding(
-      padding: const EdgeInsets.only(bottom: 32),
+  List<IptvMedia> _applyFilters(List<IptvMedia> movies) {
+    var filtered = movies;
+    if (_searchQuery.isNotEmpty) {
+      filtered = filtered.where((m) =>
+          m.name.toLowerCase().contains(_searchQuery.toLowerCase())).toList();
+    }
+    return filtered;
+  }
+
+  Map<String, List<IptvMedia>> _groupMoviesByGenre(List<IptvMedia> movies) {
+    final Map<String, List<IptvMedia>> genreMap = {};
+    for (final movie in movies) {
+      final genre = _cleanGenre(movie.group);
+      genreMap.putIfAbsent(genre, () => []).add(movie);
+    }
+    return genreMap;
+  }
+
+  String _cleanGenre(String group) {
+    String cleaned = group.replaceAll(RegExp(r'^(MOVIE|VOD|IPTV|MOVIES)\s*[-:]\s*', caseSensitive: false), '').trim();
+    return cleaned.isEmpty ? 'General' : cleaned;
+  }
+}
+
+class _SearchHeader extends StatelessWidget {
+  final ValueChanged<String> onChanged;
+  const _SearchHeader({required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(32, 24, 32, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Icon(_genreIcon(genre), size: 20, color: _genreColor(genre)),
-              const SizedBox(width: 8),
-              Text(genre,
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold)),
-              const Spacer(),
-              Text('${movies.length} titles',
-                  style: const TextStyle(color: Colors.white24, fontSize: 12)),
-            ],
-          ),
+          const Text('Movies',
+              style: TextStyle(
+                  fontSize: 32, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: -0.5)),
           const SizedBox(height: 16),
-          SizedBox(
-            height: 300,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              physics: const BouncingScrollPhysics(),
-              itemCount: movies.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 16),
-              itemBuilder: (context, index) {
-                final movie = movies[index];
-                return GestureDetector(
-                  onTap: () => _playMovie(movie),
-                  child: SizedBox(
-                    width: 154,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.05),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(12),
-                              child: movie.logo.isNotEmpty
-                                  ? CachedNetworkImage(
-                                      imageUrl: movie.logo,
-                                      fit: BoxFit.contain,
-                                      width: double.infinity,
-                                      height: double.infinity,
-                                      errorWidget: (_, __, ___) => const Center(
-                                        child: Icon(Icons.movie_rounded,
-                                            color: Colors.white12, size: 40),
-                                      ),
-                                    )
-                                  : const Center(
-                                      child: Icon(Icons.movie_rounded,
-                                          color: Colors.white12, size: 40),
-                                    ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        Text(movie.name,
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w500),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis),
-                      ],
-                    ),
-                  ),
-                );
-              },
+          Container(
+            height: 48,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+            ),
+            child: TextField(
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+              decoration: InputDecoration(
+                hintText: 'Search for movies...',
+                hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.3)),
+                prefixIcon: Icon(Icons.search, color: Colors.white.withValues(alpha: 0.3), size: 20),
+                border: InputBorder.none,
+                contentPadding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+              onChanged: onChanged,
             ),
           ),
         ],
       ),
     );
-
-    return wrapInPadding
-        ? Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 32), child: content)
-        : content;
   }
+}
+
+class _HorizontalSection extends StatelessWidget {
+  final String title;
+  final int itemCount;
+  final Widget Function(BuildContext, int) itemBuilder;
+  final VoidCallback? onViewAll;
+  final double height;
+
+  const _HorizontalSection({
+    required this.title,
+    required this.itemCount,
+    required this.itemBuilder,
+    this.onViewAll,
+    this.height = 260,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (itemCount == 0) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(32, 24, 32, 16),
+          child: Row(
+            children: [
+              Text(title,
+                  style: const TextStyle(
+                      color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
+              const Spacer(),
+              if (onViewAll != null)
+                GestureDetector(
+                  onTap: onViewAll,
+                  child: const Text('view all',
+                      style: TextStyle(color: Colors.white38, fontSize: 12, fontWeight: FontWeight.w600)),
+                ),
+            ],
+          ),
+        ),
+        SizedBox(
+          height: height,
+          child: ListView.separated(
+            padding: const EdgeInsets.symmetric(horizontal: 32),
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            itemCount: itemCount,
+            separatorBuilder: (_, __) => const SizedBox(width: 16),
+            itemBuilder: itemBuilder,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MovieCard extends StatelessWidget {
+  final IptvMedia movie;
+  final bool showProgress;
+  const _MovieCard({required this.movie, this.showProgress = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => IptvPlayerScreen(media: movie)),
+      ),
+      child: SizedBox(
+        width: 150,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Stack(
+                children: [
+                  Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.05),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: movie.logo.isNotEmpty
+                        ? CachedNetworkImage(
+                            imageUrl: movie.logo,
+                            fit: BoxFit.cover,
+                            width: double.infinity,
+                            height: double.infinity,
+                            errorWidget: (_, __, ___) => const Center(
+                                child: Icon(Icons.movie_rounded, color: Colors.white12, size: 40)),
+                          )
+                        : const Center(
+                            child: Icon(Icons.movie_rounded, color: Colors.white12, size: 40)),
+                  ),
+                  // Rating Badge (Simulated)
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.7),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.star, color: Color(0xFFE9B3FF), size: 10),
+                          SizedBox(width: 2),
+                          Text('8.4',
+                              style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                    ),
+                  ),
+                  if (showProgress)
+                    Positioned(
+                      bottom: 0,
+                      left: 0,
+                      right: 0,
+                      child: Container(
+                        height: 3,
+                        margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                        child: FractionallySizedBox(
+                          alignment: Alignment.centerLeft,
+                          widthFactor: 0.6,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFE9B3FF),
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(movie.name,
+                style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis),
+            Text('Action', // Simulated genre
+                style: const TextStyle(color: Colors.white38, fontSize: 11)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TrendingCard extends StatelessWidget {
+  final IptvMedia movie;
+  final int rank;
+  const _TrendingCard({required this.movie, required this.rank});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => IptvPlayerScreen(media: movie)),
+      ),
+      child: SizedBox(
+        width: 240,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            // Numerical Index
+            Positioned(
+              left: -10,
+              bottom: -15,
+              child: Text(
+                '$rank',
+                style: TextStyle(
+                  fontSize: 120,
+                  fontWeight: FontWeight.w900,
+                  height: 1,
+                  foreground: Paint()
+                    ..style = PaintingStyle.stroke
+                    ..strokeWidth = 2
+                    ..color = Colors.white.withValues(alpha: 0.15),
+                ),
+              ),
+            ),
+            // Movie Poster
+            Padding(
+              padding: const EdgeInsets.only(left: 60),
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.4),
+                      blurRadius: 12,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: movie.logo.isNotEmpty
+                    ? CachedNetworkImage(
+                        imageUrl: movie.logo,
+                        fit: BoxFit.cover,
+                        width: double.infinity,
+                        height: double.infinity,
+                        errorWidget: (_, __, ___) => _fallback(),
+                      )
+                    : _fallback(),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _fallback() => Container(
+      color: Colors.white.withValues(alpha: 0.05),
+      child: const Center(child: Icon(Icons.movie_rounded, color: Colors.white12, size: 40)));
 }

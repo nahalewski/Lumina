@@ -99,12 +99,11 @@ enum DownloadStatus {
 typedef DownloadProgressCallback = void Function(String taskId, double progress, int received, int total);
 
 /// Service for managing file downloads from the browser
-class DownloadService {
+class DownloadService extends ChangeNotifier {
   final Dio _dio = Dio();
   final List<DownloadTask> _tasks = [];
   final Map<String, CancelToken> _cancelTokens = {};
   DownloadProgressCallback? onProgress;
-  VoidCallback? onTaskListChanged;
 
   /// Default download directory
   String _downloadDirectory = '';
@@ -178,7 +177,7 @@ class DownloadService {
             _tasks.add(task);
           }
         }
-        onTaskListChanged?.call();
+        notifyListeners();
       }
     } catch (e) {
       debugPrint('Error loading download tasks: $e');
@@ -216,15 +215,17 @@ class DownloadService {
   }
 
   /// Start downloading a file from the given URL
-  Future<DownloadTask> startDownload(String url, {String? fileName, String? savePath}) async {
-    // Ensure download directory exists
-    final dir = Directory(_downloadDirectory);
+  Future<DownloadTask> startDownload(String url, {String? fileName, String? savePath, String? customSaveDir}) async {
+    final effectiveDir = customSaveDir ?? _downloadDirectory;
+    
+    // Ensure directory exists
+    final dir = Directory(effectiveDir);
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
 
     final name = fileName ?? extractFileName(url);
-    final finalSavePath = savePath ?? p.join(_downloadDirectory, name);
+    final finalSavePath = savePath ?? p.join(effectiveDir, name);
 
     // Check if already exists
     if (await File(finalSavePath).exists()) {
@@ -234,10 +235,10 @@ class DownloadService {
       int counter = 1;
       String newPath;
       do {
-        newPath = p.join(_downloadDirectory, '${base}_($counter)$ext');
+        newPath = p.join(effectiveDir, '${base}_($counter)$ext');
         counter++;
       } while (await File(newPath).exists());
-      return startDownload(url, fileName: '${base}_($counter)$ext');
+      return startDownload(url, fileName: p.basename(newPath), customSaveDir: effectiveDir);
     }
 
     final task = DownloadTask(
@@ -249,13 +250,34 @@ class DownloadService {
     );
 
     _tasks.add(task);
-    onTaskListChanged?.call();
+    notifyListeners();
     _saveTasks();
 
     // Start the download
     _executeDownload(task.id);
 
     return task;
+  }
+
+  /// Manually add a task (useful for external downloads like yt-dlp)
+  void addManualTask(DownloadTask task) {
+    _tasks.add(task);
+    notifyListeners();
+    _saveTasks();
+  }
+
+  /// Update an existing task
+  void updateTask(String taskId, {DownloadStatus? status, double? progress, String? errorMessage}) {
+    final index = _tasks.indexWhere((t) => t.id == taskId);
+    if (index != -1) {
+      _tasks[index] = _tasks[index].copyWith(
+        status: status,
+        progress: progress,
+        errorMessage: errorMessage,
+      );
+      notifyListeners();
+      _saveTasks();
+    }
   }
 
   /// Execute the actual download
@@ -265,7 +287,7 @@ class DownloadService {
 
     final task = _tasks[index];
     _tasks[index] = task.copyWith(status: DownloadStatus.downloading);
-    onTaskListChanged?.call();
+    notifyListeners();
 
     final cancelToken = CancelToken();
     _cancelTokens[taskId] = cancelToken;
@@ -291,7 +313,7 @@ class DownloadService {
               totalBytes: total,
             );
             onProgress?.call(taskId, progress, received, total);
-            onTaskListChanged?.call();
+            notifyListeners();
           }
         },
       );
@@ -303,7 +325,7 @@ class DownloadService {
           status: DownloadStatus.completed,
           progress: 1.0,
         );
-        onTaskListChanged?.call();
+        notifyListeners();
         _saveTasks();
       }
     } catch (e) {
@@ -321,7 +343,7 @@ class DownloadService {
           );
         }
       }
-      onTaskListChanged?.call();
+      notifyListeners();
       _saveTasks();
     } finally {
       _cancelTokens.remove(taskId);
@@ -337,7 +359,7 @@ class DownloadService {
     final idx = _tasks.indexWhere((t) => t.id == taskId);
     if (idx != -1 && _tasks[idx].status == DownloadStatus.downloading) {
       _tasks[idx] = _tasks[idx].copyWith(status: DownloadStatus.cancelled);
-      onTaskListChanged?.call();
+      notifyListeners();
       _saveTasks();
     }
   }
@@ -346,7 +368,7 @@ class DownloadService {
   Future<void> removeTask(String taskId) async {
     await cancelDownload(taskId);
     _tasks.removeWhere((t) => t.id == taskId);
-    onTaskListChanged?.call();
+    notifyListeners();
     _saveTasks();
   }
 
@@ -357,7 +379,7 @@ class DownloadService {
       t.status == DownloadStatus.failed || 
       t.status == DownloadStatus.cancelled
     );
-    onTaskListChanged?.call();
+    notifyListeners();
     _saveTasks();
   }
 
@@ -371,18 +393,30 @@ class DownloadService {
       progress: 0.0,
       errorMessage: null,
     );
-    onTaskListChanged?.call();
+    notifyListeners();
     _saveTasks();
     
     _executeDownload(taskId);
   }
 
-  /// Open the download directory
-  Future<void> openDownloadDirectory() async {
-    final dir = Directory(_downloadDirectory);
+  /// Open a specific directory
+  Future<void> openDirectory(String path) async {
+    final dir = Directory(path);
     if (await dir.exists()) {
-      await Process.run('open', [dir.path]);
+      if (Platform.isWindows) {
+        await Process.run('explorer.exe', [dir.path]);
+      } else if (Platform.isMacOS) {
+        await Process.run('open', [dir.path]);
+      } else {
+        // Linux or other
+        await Process.run('xdg-open', [dir.path]);
+      }
     }
+  }
+
+  /// Open the default download directory
+  Future<void> openDownloadDirectory() async {
+    await openDirectory(_downloadDirectory);
   }
 
   /// Get the file path for a completed download
@@ -410,8 +444,4 @@ class DownloadService {
   }
 }
 
-/// Debug print helper (same pattern used elsewhere in the codebase)
-void debugPrint(String message) {
-  // ignore: avoid_print
-  print('[DownloadService] $message');
-}
+// Custom debug print helper removed to avoid conflict with Flutter's debugPrint

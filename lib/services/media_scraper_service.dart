@@ -192,6 +192,50 @@ class MediaScraperService {
   // ─────────────────────────────────────────────────────────────────────────────
   //                                TMDB (MOVIES / TV)
   // ─────────────────────────────────────────────────────────────────────────────
+  Future<Map<String, dynamic>?> fetchTmdbDetails(int id, String apiKey, {String type = 'movie'}) async {
+    try {
+      final response = await http.get(Uri.parse(
+        'https://api.themoviedb.org/3/$type/$id?api_key=$apiKey',
+      ));
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+    } catch (e) {
+      print('TMDB details error: $e');
+    }
+    return null;
+  }
+
+  Future<List<Map<String, dynamic>>> searchTmdbMulti(
+      String query, String apiKey,
+      {String type = 'movie'}) async {
+    try {
+      final response = await http.get(Uri.parse(
+        'https://api.themoviedb.org/3/search/$type?api_key=$apiKey&query=${Uri.encodeComponent(query)}&include_adult=false',
+      ));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final results = (data['results'] as List).take(10);
+        return results.map<Map<String, dynamic>>((item) {
+          return {
+            'id': item['id'],
+            'type': type,
+            'title': item['title'] ?? item['name'] ?? '',
+            'posterUrl': item['poster_path'] != null
+                ? 'https://image.tmdb.org/t/p/w342${item['poster_path']}'
+                : null,
+            'overview': item['overview'] ?? '',
+            'releaseDate': item['release_date'] ?? item['first_air_date'] ?? '',
+            'rating': (item['vote_average'] as num?)?.toDouble(),
+          };
+        }).toList();
+      }
+    } catch (e) {
+      print('TMDB multi-search error: $e');
+    }
+    return [];
+  }
+
   Future<Map<String, dynamic>?> searchTmdb(String query, String apiKey, {String type = 'movie'}) async {
     try {
       final response = await http.get(Uri.parse(
@@ -205,7 +249,12 @@ class MediaScraperService {
           final item = results[0];
           return {
             'title': item['title'] ?? item['name'],
-            'posterUrl': 'https://image.tmdb.org/t/p/original${item['poster_path']}',
+            'posterUrl': item['poster_path'] != null
+                ? 'https://image.tmdb.org/t/p/original${item['poster_path']}'
+                : null,
+            'backdropUrl': item['backdrop_path'] != null
+                ? 'https://image.tmdb.org/t/p/original${item['backdrop_path']}'
+                : null,
             'description': item['overview'],
             'rating': item['vote_average'],
             'releaseDate': item['release_date'] ?? item['first_air_date'],

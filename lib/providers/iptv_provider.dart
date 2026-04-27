@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/iptv_service.dart';
+import '../services/metadata_service.dart';
 
 class IptvProvider with ChangeNotifier {
   final IptvService _service = IptvService();
+  final MetadataService _metadataService = MetadataService();
   List<IptvMedia> _allMedia = [];
   List<EpgEntry> _epgEntries = [];
   bool _isLoading = false;
@@ -11,12 +13,17 @@ class IptvProvider with ChangeNotifier {
   bool _isLoadingEpg = false;
   Timer? _refreshTimer;
   String? _lastError;
+  
+  final List<String> _debugLogs = [];
+  List<String> get debugLogs => List.unmodifiable(_debugLogs);
+  Stream<String> get logStream => _service.logStream;
 
   // Categorized data per tab
   List<IptvMedia> _liveChannels = [];
   List<IptvMedia> _movies = [];
   List<IptvMedia> _tvShows = [];
   List<IptvMedia> _recentlyAddedMovies = [];
+  List<IptvMedia> _recentlyAddedSeries = []; // Represenative episodes for shows
   Map<String, Map<String, List<IptvMedia>>> _groupedSeries =
       {}; // Show -> Season -> Episodes
 
@@ -29,6 +36,7 @@ class IptvProvider with ChangeNotifier {
   List<IptvMedia> get movies => _movies;
   List<IptvMedia> get tvShows => _tvShows;
   List<IptvMedia> get recentlyAddedMovies => _recentlyAddedMovies;
+  List<IptvMedia> get recentlyAddedSeries => _recentlyAddedSeries;
   Map<String, Map<String, List<IptvMedia>>> get groupedSeries => _groupedSeries;
 
   List<String> get liveGroups => _liveGroups;
@@ -50,6 +58,12 @@ class IptvProvider with ChangeNotifier {
   Timer? _loadingTimeout;
 
   void initialize() {
+    _service.logStream.listen((log) {
+      _debugLogs.add(log);
+      if (_debugLogs.length > 200) _debugLogs.removeAt(0);
+      notifyListeners();
+    });
+
     _refreshTimer?.cancel();
     Future.microtask(() {
       try {
@@ -195,12 +209,32 @@ class IptvProvider with ChangeNotifier {
           _groupedSeries[showName]!["Season $seasonNum"]!.add(episode);
         }
 
-        // 2. Setup Recently Added (sort by addedDate descending)
         _recentlyAddedMovies = List.from(_movies)
           ..sort((a, b) => (b.addedDate ?? DateTime(2000))
               .compareTo(a.addedDate ?? DateTime(2000)));
         if (_recentlyAddedMovies.length > 50) {
           _recentlyAddedMovies = _recentlyAddedMovies.sublist(0, 50);
+        }
+
+        // 2.5 Compute Recently Added Series (one per show)
+        final uniqueSeriesMap = <String, IptvMedia>{};
+        for (final show in _groupedSeries.keys) {
+          final seasons = _groupedSeries[show]!;
+          IptvMedia? latestEp;
+          for (final episodes in seasons.values) {
+            for (final ep in episodes) {
+              if (latestEp == null || (ep.addedDate != null && (latestEp.addedDate == null || ep.addedDate!.isAfter(latestEp.addedDate!)))) {
+                latestEp = ep;
+              }
+            }
+          }
+          if (latestEp != null) uniqueSeriesMap[show] = latestEp;
+        }
+        _recentlyAddedSeries = uniqueSeriesMap.values.toList()
+          ..sort((a, b) => (b.addedDate ?? DateTime(2000))
+              .compareTo(a.addedDate ?? DateTime(2000)));
+        if (_recentlyAddedSeries.length > 50) {
+          _recentlyAddedSeries = _recentlyAddedSeries.sublist(0, 50);
         }
 
         _lastError = null;
@@ -211,6 +245,55 @@ class IptvProvider with ChangeNotifier {
 
     _isLoading = false;
     notifyListeners();
+    
+    // Lazy load missing artworks
+    if (_hasLoaded) {
+      loadMissingArtworks();
+    }
+  }
+
+  Future<void> loadMissingArtworks() async {
+    bool updated = false;
+    
+    // Enrichment for Movies
+    for (int i = 0; i < _movies.length; i++) {
+      if (_movies[i].logo.isEmpty) {
+        final poster = await _metadataService.fetchIptvPoster(_movies[i].name, isSeries: false);
+        if (poster != null) {
+          _movies[i] = _movies[i].copyWith(logo: poster);
+          updated = true;
+          if (i % 5 == 0) notifyListeners(); // Partial updates
+        }
+      }
+    }
+
+    // Enrichment for Series (per show)
+    for (final showName in _groupedSeries.keys) {
+      final seasons = _groupedSeries[showName]!;
+      bool showHasLogo = false;
+      for (final episodes in seasons.values) {
+        if (episodes.any((e) => e.logo.isNotEmpty)) {
+          showHasLogo = true;
+          break;
+        }
+      }
+
+      if (!showHasLogo) {
+        final poster = await _metadataService.fetchIptvPoster(showName, isSeries: true);
+        if (poster != null) {
+          for (final season in seasons.keys) {
+            final episodes = seasons[season]!;
+            for (int j = 0; j < episodes.length; j++) {
+              episodes[j] = episodes[j].copyWith(logo: poster);
+            }
+          }
+          updated = true;
+          notifyListeners();
+        }
+      }
+    }
+
+    if (updated) notifyListeners();
   }
 
   Future<void> loadEpg({bool forceRefresh = false}) async {
@@ -245,6 +328,11 @@ class IptvProvider with ChangeNotifier {
     } catch (_) {
       return null;
     }
+  }
+
+  void clearLogs() {
+    _debugLogs.clear();
+    notifyListeners();
   }
 
   @override

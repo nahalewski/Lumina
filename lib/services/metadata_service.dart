@@ -46,22 +46,22 @@ class MetadataService {
     return null;
   }
 
-  /// Sanitize filename to get a clean anime title
+  /// Sanitize filename to get a clean title for search
   String _sanitizeQuery(String query) {
     // Remove common scene tags and extensions
     String result = query.replaceAll(
-      RegExp(r'\.(mp4|mkv|avi|mov|webm)$', caseSensitive: false),
+      RegExp(r'\.(mp4|mkv|avi|mov|webm|ts|m4v|flv|wmv|mpg|mpeg|vob)$', caseSensitive: false),
       '',
     );
     result = result.replaceAll(RegExp(r'\[.*?\]'), ''); // Remove [SubGroup]
     result = result.replaceAll(RegExp(r'\(.*?\)'), ''); // Remove (Year)
     result = result.replaceAll(
-      RegExp(r'S\d+E\d+', caseSensitive: false),
+      RegExp(r'\bS\d+E\d+\b', caseSensitive: false),
       '',
     ); // Remove S01E01
     result = result.replaceAll(
       RegExp(
-        r'\b(h264|x264|hevc|x265|1080p|720p|bluray|multi|sub|dub)\b',
+        r'\b(h264|x264|hevc|x265|1080p|720p|2160p|4k|bluray|multi|sub|dub|web-dl|webrip|brrip|hdtv|internal|proper|repack)\b',
         caseSensitive: false,
       ),
       '',
@@ -70,7 +70,11 @@ class MetadataService {
       RegExp(r'[\._\-]'),
       ' ',
     ); // Replace separators with spaces
-    return result.trim();
+    
+    // Remove trailing junk characters like ( or [ that might be left over
+    result = result.replaceAll(RegExp(r'[\[\(\]\)]'), ' ');
+    
+    return result.replaceAll(RegExp(r'\s+'), ' ').trim();
   }
 
   /// Apply metadata to a MediaFile
@@ -210,28 +214,17 @@ class MetadataService {
   }
 
   String _movieTitleFromFile(String fileName) {
-    var title = fileName.replaceAll(RegExp(r'\.[^.]+$'), '');
-    title = title.replaceAll(RegExp(r'\b(19\d{2}|20\d{2})\b.*$'), '');
-    return title
-        .replaceAll(RegExp(r'\[[^\]]+\]'), ' ')
-        .replaceAll(
-          RegExp(
-            r'\b(1080p|720p|2160p|4k|bluray|web-dl|webrip|h264|x264|x265|hevc)\b',
-            caseSensitive: false,
-          ),
-          ' ',
-        )
-        .replaceAll(RegExp(r'[._]+'), ' ')
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
+    return _sanitizeQuery(fileName);
   }
 
   Future<MediaFile?> _searchTmdbMovie(MediaFile file, String query) async {
     try {
+      final year = file.releaseYear;
       final url = Uri.parse(
         '$_tmdbBaseUrl/search/movie?${_tmdbQueryParameters({
               'query': query,
-              'include_adult': 'false'
+              'include_adult': 'false',
+              if (year != null) 'primary_release_year': year.toString(),
             })}',
       );
       final response = await http.get(
@@ -256,8 +249,12 @@ class MetadataService {
     ParsedEpisodeInfo parsed,
   ) async {
     try {
+      final year = file.releaseYear;
       final url = Uri.parse(
-        '$_tmdbBaseUrl/search/tv?${_tmdbQueryParameters({'query': query})}',
+        '$_tmdbBaseUrl/search/tv?${_tmdbQueryParameters({
+              'query': query,
+              if (year != null) 'first_air_date_year': year.toString(),
+            })}',
       );
       final response = await http.get(
         url,
@@ -403,7 +400,7 @@ class MetadataService {
   }
 
   String? _image(dynamic path) =>
-      path == null ? null : '$_tmdbImageBaseUrl$path';
+      (path == null || (path is String && path.isEmpty)) ? null : '$_tmdbImageBaseUrl$path';
 
   Map<String, String> _tmdbHeaders() {
     if (_tmdbAccessToken.isNotEmpty) {
@@ -418,8 +415,7 @@ class MetadataService {
   String _tmdbQueryParameters(Map<String, String> values) {
     final params = {
       ...values,
-      if (_tmdbAccessToken.isEmpty && _tmdbApiKey.isNotEmpty)
-        'api_key': _tmdbApiKey,
+      if (_tmdbApiKey.isNotEmpty) 'api_key': _tmdbApiKey,
     };
     return params.entries
         .map((entry) =>
@@ -437,5 +433,34 @@ class MetadataService {
         );
     final key = trailer?['key'];
     return key == null ? null : 'https://www.youtube.com/watch?v=$key';
+  }
+
+  /// Fetch poster for an IPTV media item
+  Future<String?> fetchIptvPoster(String name, {bool isSeries = false}) async {
+    try {
+      final query = _sanitizeQuery(name);
+      if (query.isEmpty) return null;
+
+      final type = isSeries ? 'tv' : 'movie';
+      final url = Uri.parse(
+        '$_tmdbBaseUrl/search/$type?${_tmdbQueryParameters({
+              'query': query,
+              'include_adult': 'false',
+            })}',
+      );
+      final response = await http.get(url, headers: _tmdbHeaders());
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data['results'] != null && data['results'].isNotEmpty) {
+          final posterPath = data['results'][0]['poster_path'];
+          if (posterPath != null) {
+            return '$_tmdbImageBaseUrl$posterPath';
+          }
+        }
+      }
+    } catch (e) {
+      print('Error fetching IPTV poster: $e');
+    }
+    return null;
   }
 }

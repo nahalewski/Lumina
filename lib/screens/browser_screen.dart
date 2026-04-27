@@ -22,7 +22,7 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
   final List<StreamSubscription<dynamic>> _windowsSubscriptions = [];
   final TextEditingController _urlController =
       TextEditingController(text: 'https://www.google.com');
-  final DownloadService _downloadService = DownloadService();
+  DownloadService? _downloadService;
   static const String _homeUrl = 'https://www.google.com/webhp?igu=1';
 
   bool _isLoading = true;
@@ -34,18 +34,6 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
   @override
   void initState() {
     super.initState();
-    _downloadService.initialize();
-    _downloadService.onTaskListChanged = () {
-      if (mounted) setState(() {});
-    };
-    _downloadService.onProgress = (taskId, progress, received, total) {
-      if (mounted) {
-        setState(() {
-          _downloadProgress = progress;
-        });
-      }
-    };
-
     if (Platform.isAndroid || Platform.isIOS) {
       _controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
@@ -93,6 +81,21 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
         ..loadRequest(Uri.parse(_homeUrl));
     } else if (Platform.isWindows) {
       _initializeWindowsWebView();
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_downloadService == null) {
+      _downloadService = Provider.of<DownloadService>(context);
+      _downloadService!.onProgress = (taskId, progress, received, total) {
+        if (mounted) {
+          setState(() {
+            _downloadProgress = progress;
+          });
+        }
+      };
     }
   }
 
@@ -278,12 +281,12 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
             ),
             const SizedBox(height: 12),
             Text(
-              'File: ${fileName ?? _downloadService.extractFileName(url)}',
+              'File: ${fileName ?? _downloadService!.extractFileName(url)}',
               style: const TextStyle(color: Colors.white70, fontSize: 13),
             ),
             const SizedBox(height: 12),
             Text(
-              'Save to: ${_downloadService.downloadDirectory}',
+              'Save to: ${_downloadService!.downloadDirectory}',
               style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.4), fontSize: 11),
             ),
@@ -320,13 +323,25 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
     });
 
     try {
-      await _downloadService.startDownload(url, fileName: fileName);
+      final isMp3 = (fileName ?? _downloadService!.extractFileName(url))
+          .toLowerCase()
+          .endsWith('.mp3');
+      String? customDir;
+      
+      if (isMp3) {
+        final provider = Provider.of<MediaProvider>(context, listen: false);
+        customDir = provider.settings.musicSavePath;
+      }
+
+      await _downloadService!.startDownload(url, 
+          fileName: fileName, 
+          customSaveDir: customDir);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-                'Download started: ${fileName ?? _downloadService.extractFileName(url)}'),
+                'Download started: ${fileName ?? _downloadService!.extractFileName(url)}'),
             backgroundColor: const Color(0xFF0A84FF),
             duration: const Duration(seconds: 2),
           ),
@@ -413,7 +428,7 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final activeDownloads = _downloadService.activeDownloadCount;
+    final activeDownloads = _downloadService!.activeDownloadCount;
 
     return Column(
       children: [
@@ -541,7 +556,7 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
   }
 
   Widget _buildDownloadManager() {
-    final tasks = _downloadService.tasks;
+    final tasks = _downloadService!.tasks;
 
     return Container(
       height: 280,
@@ -576,14 +591,14 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
                 const Spacer(),
                 if (tasks.any((t) => t.status == DownloadStatus.completed))
                   TextButton(
-                    onPressed: () => _downloadService.clearCompleted(),
+                    onPressed: () => _downloadService!.clearCompleted(),
                     child: const Text('Clear Completed',
                         style: TextStyle(color: Colors.white54, fontSize: 12)),
                   ),
                 IconButton(
                   icon: const Icon(Icons.folder_open_rounded,
                       size: 18, color: Colors.white54),
-                  onPressed: () => _downloadService.openDownloadDirectory(),
+                  onPressed: () => _downloadService!.openDownloadDirectory(),
                   tooltip: 'Open Downloads Folder',
                 ),
                 IconButton(
@@ -641,7 +656,7 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
         actionWidget = IconButton(
           icon:
               const Icon(Icons.close_rounded, size: 16, color: Colors.white38),
-          onPressed: () => _downloadService.removeTask(task.id),
+          onPressed: () => _downloadService!.removeTask(task.id),
         );
         break;
       case DownloadStatus.downloading:
@@ -651,7 +666,7 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
         actionWidget = IconButton(
           icon:
               const Icon(Icons.cancel_rounded, size: 16, color: Colors.white38),
-          onPressed: () => _downloadService.cancelDownload(task.id),
+          onPressed: () => _downloadService!.cancelDownload(task.id),
         );
         break;
       case DownloadStatus.completed:
@@ -664,13 +679,13 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
             IconButton(
               icon: const Icon(Icons.folder_open_rounded,
                   size: 16, color: Colors.white38),
-              onPressed: () => _downloadService.openDownloadDirectory(),
+              onPressed: () => _downloadService!.openDownloadDirectory(),
               tooltip: 'Show in Finder',
             ),
             IconButton(
               icon: const Icon(Icons.close_rounded,
                   size: 16, color: Colors.white38),
-              onPressed: () => _downloadService.removeTask(task.id),
+              onPressed: () => _downloadService!.removeTask(task.id),
             ),
           ],
         );
@@ -685,13 +700,13 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
             IconButton(
               icon: const Icon(Icons.refresh_rounded,
                   size: 16, color: Colors.white38),
-              onPressed: () => _downloadService.retryDownload(task.id),
+              onPressed: () => _downloadService!.retryDownload(task.id),
               tooltip: 'Retry',
             ),
             IconButton(
               icon: const Icon(Icons.close_rounded,
                   size: 16, color: Colors.white38),
-              onPressed: () => _downloadService.removeTask(task.id),
+              onPressed: () => _downloadService!.removeTask(task.id),
             ),
           ],
         );
@@ -703,7 +718,7 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
         actionWidget = IconButton(
           icon:
               const Icon(Icons.close_rounded, size: 16, color: Colors.white38),
-          onPressed: () => _downloadService.removeTask(task.id),
+          onPressed: () => _downloadService!.removeTask(task.id),
         );
         break;
     }
@@ -801,7 +816,7 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
     }
     _windowsController?.dispose();
     _urlController.dispose();
-    _downloadService.dispose();
+    // Note: Don't dispose global download service here
     super.dispose();
   }
 

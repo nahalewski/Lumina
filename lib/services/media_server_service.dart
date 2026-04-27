@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:crypto/crypto.dart';
+import 'package:path_provider/path_provider.dart';
 import '../models/media_model.dart';
 import '../providers/iptv_provider.dart';
 import 'iptv_service.dart';
@@ -42,6 +43,10 @@ class MediaServerService {
   final List<String> _pairedDeviceIds = [];
   final List<String> _deniedDeviceIds = [];
   final Set<String> _pendingDeviceIds = {};
+  final List<String> _deletedIds = [];
+  final Set<String> _lastLibraryIds = {};
+  final Map<String, int> _fileSizeCache = {};
+  final Map<String, bool> _srtExistsCache = {};
   final StreamController<PairingRequest> _pairingController =
       StreamController.broadcast();
   Stream<PairingRequest> get pairingRequests => _pairingController.stream;
@@ -51,6 +56,24 @@ class MediaServerService {
   final ValueNotifier<int> activeConnections = ValueNotifier(0);
   final ValueNotifier<String?> lastError = ValueNotifier(null);
   final ValueNotifier<List<String>> logs = ValueNotifier([]);
+
+  // APK update distribution
+  Directory? _updateFolderCache;
+  final ValueNotifier<String> updateFolderPath = ValueNotifier('');
+
+  Future<Directory> getUpdateFolder() async {
+    if (_updateFolderCache != null) return _updateFolderCache!;
+    final base = await getApplicationSupportDirectory();
+    _updateFolderCache = Directory('${base.path}/updates');
+    if (!_updateFolderCache!.existsSync()) {
+      await _updateFolderCache!.create(recursive: true);
+    }
+    updateFolderPath.value = _updateFolderCache!.path;
+    return _updateFolderCache!;
+  }
+
+  /// Also used internally by the endpoint handlers
+  Future<Directory> _getUpdateFolder() => getUpdateFolder();
 
   /// Reference to the IPTV provider for serving IPTV data via API
   IptvProvider? _iptvProvider;
@@ -110,47 +133,105 @@ class MediaServerService {
   Future<void> start({int port = 8080}) async {
     if (_server != null) return;
 
-    _port = port;
     lastError.value = null;
-    _addLog('Starting server on port $_port...');
 
-    try {
-      _server = await HttpServer.bind(InternetAddress.anyIPv4, _port);
-      isRunning.value = true;
-      _startDiscoveryListener();
-
-      // Get the local IP address for display
-      final interfaces = await NetworkInterface.list();
-      String? localIp;
-      for (final interface in interfaces) {
-        for (final addr in interface.addresses) {
-          if (addr.type == InternetAddressType.IPv4 && !addr.isLoopback) {
-            localIp = addr.address;
-            break;
+    // Try to bind, falling back to the next few ports if the preferred one is busy
+    HttpServer? bound;
+    int boundPort = port;
+    for (int candidate = port; candidate <= port + 10; candidate++) {
+      try {
+        bound = await HttpServer.bind(InternetAddress.anyIPv4, candidate);
+        boundPort = candidate;
+        break;
+      } on SocketException catch (e) {
+        final msg = e.message.toLowerCase();
+        if (msg.contains('already in use') || msg.contains('permission') ||
+            msg.contains('address')) {
+          _addLog('Port $candidate in use, trying ${candidate + 1}...');
+          // On Windows, attempt to release the port if it's the preferred one
+          if (Platform.isWindows && candidate == port) {
+            await _releaseWindowsPort(port);
+            await Future<void>.delayed(const Duration(milliseconds: 400));
+            try {
+              bound = await HttpServer.bind(InternetAddress.anyIPv4, candidate);
+              boundPort = candidate;
+              break;
+            } catch (_) {}
           }
+          continue;
         }
-        if (localIp != null) break;
+        // Non-port error — bail immediately
+        final error = 'Failed to start: $e';
+        _addLog('ERROR: $error');
+        lastError.value = error;
+        isRunning.value = false;
+        return;
       }
-      localAddress.value = 'http://${localIp ?? 'localhost'}:$_port';
+    }
 
-      _addLog('Server started on ${localAddress.value}');
-      debugPrint('[MediaServer] Started on ${localAddress.value}');
-      if (_remoteDomain.isNotEmpty) {
-        debugPrint('[MediaServer] Remote access via https://$_remoteDomain');
-      }
-
-      _server!.listen((request) {
-        unawaited(_handleRequest(request));
-      }, onError: (e) {
-        debugPrint('[MediaServer] Error: $e');
-      });
-    } catch (e) {
-      final error = 'Failed to start: $e';
+    if (bound == null) {
+      const error = 'All ports 8080–8090 are in use. Free a port and try again.';
       _addLog('ERROR: $error');
-      debugPrint('[MediaServer] $error');
       lastError.value = error;
       isRunning.value = false;
-      rethrow;
+      return;
+    }
+
+    _server = bound;
+    _port = boundPort;
+    _addLog('Server started on port $_port');
+
+    isRunning.value = true;
+    _startDiscoveryListener();
+
+    // Resolve local IP for display
+    final interfaces = await NetworkInterface.list();
+    String? localIp;
+    for (final interface in interfaces) {
+      for (final addr in interface.addresses) {
+        if (addr.type == InternetAddressType.IPv4 && !addr.isLoopback) {
+          localIp = addr.address;
+          break;
+        }
+      }
+      if (localIp != null) break;
+    }
+    localAddress.value = 'http://${localIp ?? 'localhost'}:$_port';
+
+    _addLog('Listening on ${localAddress.value}');
+    debugPrint('[MediaServer] Started on ${localAddress.value}');
+    if (_remoteDomain.isNotEmpty) {
+      debugPrint('[MediaServer] Remote access via https://$_remoteDomain');
+    }
+
+    _server!.listen((request) {
+      unawaited(_handleRequest(request));
+    }, onError: (e) {
+      debugPrint('[MediaServer] Request error: $e');
+    });
+  }
+
+  /// On Windows, find the PID holding [port] via netstat and kill it.
+  Future<void> _releaseWindowsPort(int port) async {
+    try {
+      final result = await Process.run(
+        'netstat', ['-ano', '-p', 'TCP'],
+        runInShell: true,
+      );
+      final lines = (result.stdout as String).split('\n');
+      for (final line in lines) {
+        if (line.contains(':$port ') && line.contains('LISTENING')) {
+          final parts = line.trim().split(RegExp(r'\s+'));
+          final pid = parts.last.trim();
+          if (pid.isNotEmpty && int.tryParse(pid) != null) {
+            _addLog('Port $port held by PID $pid — releasing...');
+            await Process.run('taskkill', ['/PID', pid, '/F'], runInShell: true);
+          }
+          break;
+        }
+      }
+    } catch (e) {
+      debugPrint('[MediaServer] Could not release port $port: $e');
     }
   }
 
@@ -246,10 +327,49 @@ class MediaServerService {
   }
 
   void updateLibrary(List<MediaFile> library) {
+    final now = DateTime.now();
+    final newIds = library.map((m) => m.id).toSet();
+
+    // Track deletions: items that were in _lastLibraryIds but are not in newIds
+    for (final id in _lastLibraryIds) {
+      if (!newIds.contains(id)) {
+        if (!_deletedIds.contains(id)) {
+          _deletedIds.add(id);
+        }
+      }
+    }
+
+    // Clear deleted status if an item reappears
+    _deletedIds.removeWhere((id) => newIds.contains(id));
+
+    _lastLibraryIds.clear();
+    _lastLibraryIds.addAll(newIds);
+
     _library = List<MediaFile>.unmodifiable(library);
     _libraryById
       ..clear()
       ..addEntries(_library.map((media) => MapEntry(media.id, media)));
+
+    // Pre-compute expensive disk stats once per updateLibrary call
+    for (final media in _library) {
+      if (!_fileSizeCache.containsKey(media.filePath)) {
+        try {
+          final f = File(media.filePath);
+          _fileSizeCache[media.filePath] = f.existsSync() ? f.lengthSync() : 0;
+          final srtPath =
+              '${media.filePath.replaceAll(RegExp(r'\.[^.]+$'), '')}.srt';
+          _srtExistsCache[media.filePath] = File(srtPath).existsSync();
+        } catch (_) {
+          _fileSizeCache[media.filePath] = 0;
+          _srtExistsCache[media.filePath] = false;
+        }
+      }
+    }
+    // Evict stale entries for removed files
+    final currentPaths = _library.map((m) => m.filePath).toSet();
+    _fileSizeCache.removeWhere((k, _) => !currentPaths.contains(k));
+    _srtExistsCache.removeWhere((k, _) => !currentPaths.contains(k));
+
     _libraryJsonCache = _library.map((media) => _mediaToJson(media)).toList();
     _addLog('Library updated: ${library.length} files');
     debugPrint('[MediaServer] Library updated: ${library.length} files');
@@ -258,16 +378,23 @@ class MediaServerService {
   /// Get the local server URL for display
   String get url => localAddress.value;
 
+  static const int _maxConcurrentConnections = 60;
+
   /// Handle incoming HTTP requests
   Future<void> _handleRequest(HttpRequest request) async {
+    if (activeConnections.value >= _maxConcurrentConnections) {
+      request.response.statusCode = HttpStatus.serviceUnavailable;
+      request.response.headers.set('Retry-After', '2');
+      await request.response.close();
+      return;
+    }
     activeConnections.value++;
 
     try {
-      final uri = Uri.parse(request.uri.toString());
-      final path = uri.path;
       final method = request.method;
-      final clientIp =
-          request.connectionInfo?.remoteAddress.address ?? 'unknown';
+      final uri = request.uri;
+      final path = uri.path;
+      final clientIp = request.connectionInfo?.remoteAddress.address ?? 'unknown';
 
       _addLog('$method $path (from $clientIp)');
       debugPrint('[MediaServer] $method $path');
@@ -286,6 +413,10 @@ class MediaServerService {
       }
 
       if (!_isAuthorized(request) &&
+          path != '/' &&
+          path != '/privacy' &&
+          path != '/terms' &&
+          path != '/google69ba675d5947bbe0.html' &&
           path != '/api/health' &&
           path != '/api/discover' &&
           path != '/api/pairing/status' &&
@@ -301,7 +432,15 @@ class MediaServerService {
       }
 
       // Route handling
-      if (path == '/api/discover') {
+      if (path == '/') {
+        await _handleHomePage(request);
+      } else if (path == '/privacy') {
+        await _handlePrivacyPolicy(request);
+      } else if (path == '/terms') {
+        await _handleTermsOfService(request);
+      } else if (path == '/google69ba675d5947bbe0.html') {
+        await _handleGoogleVerification(request);
+      } else if (path == '/api/discover') {
         await _handleDiscover(request);
       } else if (path == '/api/health') {
         await _handleHealth(request);
@@ -311,6 +450,8 @@ class MediaServerService {
         await _handleAuthLogin(request);
       } else if (path == '/api/library') {
         await _handleLibrary(request);
+      } else if (path == '/api/library/changes') {
+        await _handleLibraryChanges(request);
       } else if (path == '/api/documents/ebooks') {
         await _handleDocumentList(request, 'ebook');
       } else if (path == '/api/documents/manga') {
@@ -348,6 +489,10 @@ class MediaServerService {
         await _handleIptvStreamById(request, id);
       } else if (path == '/api/music/download' && method == 'POST') {
         await _handleMusicDownload(request);
+      } else if (path == '/api/update/check') {
+        await _handleUpdateCheck(request);
+      } else if (path == '/api/update/download') {
+        await _handleUpdateDownload(request);
       } else {
         await _sendJson(request, {'error': 'Not found'}, HttpStatus.notFound);
       }
@@ -575,11 +720,42 @@ class MediaServerService {
     });
   }
 
-  /// GET /api/library
+  /// GET /api/library?offset=0&limit=300
   Future<void> _handleLibrary(HttpRequest request) async {
+    final params = request.uri.queryParameters;
+    final offset = int.tryParse(params['offset'] ?? '0') ?? 0;
+    final limit = (int.tryParse(params['limit'] ?? '0') ?? 0)
+        .clamp(0, 500);
+    final page = limit > 0
+        ? _libraryJsonCache.skip(offset).take(limit).toList()
+        : _libraryJsonCache;
     await _sendJson(request, {
-      'media': _libraryJsonCache,
+      'media': page,
       'total': _libraryJsonCache.length,
+      'offset': offset,
+      'limit': limit > 0 ? limit : _libraryJsonCache.length,
+      'serverTime': DateTime.now().toIso8601String(),
+    });
+  }
+
+  /// GET /api/library/changes?since=2026-04-27T10:00:00Z
+  Future<void> _handleLibraryChanges(HttpRequest request) async {
+    final sinceStr = request.uri.queryParameters['since'];
+    if (sinceStr == null) {
+      await _handleLibrary(request);
+      return;
+    }
+
+    final since = DateTime.tryParse(sinceStr) ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final updated = _library
+        .where((m) => m.updatedAt.isAfter(since))
+        .map((m) => _mediaToJson(m))
+        .toList();
+
+    await _sendJson(request, {
+      'updated': updated,
+      'deleted': _deletedIds.toList(), // For simplicity, we send all recent deletions
+      'serverTime': DateTime.now().toIso8601String(),
     });
   }
 
@@ -894,6 +1070,8 @@ class MediaServerService {
       'isAudio': media.isAudio,
       'animeId': media.animeId,
       'animeTitle': media.animeTitle,
+      'showTitle': media.showTitle,
+      'movieTitle': media.movieTitle,
       'season': media.season,
       'episode': media.episode,
       'coverArtUrl': media.coverArtUrl,
@@ -903,12 +1081,17 @@ class MediaServerService {
       'artist': media.artist,
       'album': media.album,
       'trackNumber': media.trackNumber,
-      'hasSubtitles':
-          File('${media.filePath.replaceAll(RegExp(r'\.[^.]+$'), '')}.srt')
-              .existsSync(),
-      'fileSize': File(media.filePath).existsSync()
-          ? File(media.filePath).lengthSync()
-          : 0,
+      'hasSubtitles': _srtExistsCache[media.filePath] ?? false,
+      'fileSize': _fileSizeCache[media.filePath] ?? 0,
+      'updatedAt': media.updatedAt.toIso8601String(),
+      'isDeleted': media.isDeleted,
+      'watchProgress': media.watchProgress,
+      'lastPlayed': media.lastPlayed?.toIso8601String(),
+      'synopsis': media.synopsis ?? media.description,
+      'rating': media.rating,
+      'genres': media.genres,
+      'releaseDate': media.releaseDate ?? media.airDate,
+      'releaseYear': media.releaseYear,
     };
   }
 
@@ -1017,6 +1200,192 @@ class MediaServerService {
       default:
         return 'application/octet-stream';
     }
+  }
+
+  // ─── APK Update Endpoints ────────────────────────────────────────────────
+
+  /// Returns JSON describing the staged APK, or 404 if none is present.
+  /// Expected update_info.json format:
+  ///   { "version": "1.0.1", "build": 2, "releaseNotes": "...", "fileName": "lumina.apk" }
+  Future<void> _handleUpdateCheck(HttpRequest request) async {
+    final dir = await _getUpdateFolder();
+    final infoFile = File('${dir.path}/update_info.json');
+    if (!infoFile.existsSync()) {
+      await _sendJson(request, {'error': 'No update staged'}, HttpStatus.notFound);
+      return;
+    }
+    try {
+      final info = jsonDecode(await infoFile.readAsString()) as Map<String, dynamic>;
+      final fileName = info['fileName'] as String? ?? 'lumina.apk';
+      final apkFile = File('${dir.path}/$fileName');
+      info['size'] = apkFile.existsSync() ? apkFile.lengthSync() : 0;
+      await _sendJson(request, info);
+    } catch (e) {
+      await _sendJson(request, {'error': 'Malformed update_info.json'}, HttpStatus.internalServerError);
+    }
+  }
+
+  /// Streams the staged APK file to the client.
+  Future<void> _handleUpdateDownload(HttpRequest request) async {
+    final dir = await _getUpdateFolder();
+    final infoFile = File('${dir.path}/update_info.json');
+    if (!infoFile.existsSync()) {
+      request.response.statusCode = HttpStatus.notFound;
+      await request.response.close();
+      return;
+    }
+    try {
+      final info = jsonDecode(await infoFile.readAsString()) as Map<String, dynamic>;
+      final fileName = info['fileName'] as String? ?? 'lumina.apk';
+      final apkFile = File('${dir.path}/$fileName');
+      if (!apkFile.existsSync()) {
+        request.response.statusCode = HttpStatus.notFound;
+        await request.response.close();
+        return;
+      }
+      final length = apkFile.lengthSync();
+      request.response.headers
+        ..set('Content-Type', 'application/vnd.android.package-archive')
+        ..set('Content-Length', length.toString())
+        ..set('Content-Disposition', 'attachment; filename="$fileName"');
+      await apkFile.openRead().pipe(request.response);
+    } catch (e) {
+      debugPrint('[MediaServer] Update download error: $e');
+      try {
+        request.response.statusCode = HttpStatus.internalServerError;
+        await request.response.close();
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _handleHomePage(HttpRequest request) async {
+    const html = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Lumina Media</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #0f0f12; color: #fff; text-align: center; padding: 50px 20px; }
+        .container { max-width: 600px; margin: 0 auto; background: #1a1a1f; padding: 40px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.05); }
+        h1 { color: #aac7ff; margin-bottom: 10px; font-size: 32px; font-weight: 800; letter-spacing: -1px; }
+        p { color: #888; line-height: 1.6; font-size: 16px; }
+        .links { margin-top: 30px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 20px; }
+        a { color: #0a84ff; text-decoration: none; font-weight: 600; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Lumina Media</h1>
+        <p>A personal media streaming application.</p>
+        <p>Lumina Media helps you organize and play your own media collection across your devices.</p>
+        <div class="links">
+            <a href="/privacy">Privacy Policy</a> &bull; 
+            <a href="/terms">Terms of Service</a>
+        </div>
+    </div>
+</body>
+</html>
+''';
+    await _sendHtml(request, html);
+  }
+
+  Future<void> _handlePrivacyPolicy(HttpRequest request) async {
+    const html = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Privacy Policy - Lumina Media</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f0f12; color: #fff; padding: 40px 20px; line-height: 1.6; }
+        .container { max-width: 800px; margin: 0 auto; background: #1a1a1f; padding: 40px; border-radius: 24px; border: 1px solid rgba(255,255,255,0.05); }
+        h1 { color: #aac7ff; font-weight: 800; letter-spacing: -1px; }
+        h2 { color: #fff; margin-top: 32px; font-size: 20px; }
+        p, li { color: #aaa; font-size: 15px; }
+        .back { margin-bottom: 24px; }
+        a { color: #0a84ff; text-decoration: none; font-weight: 600; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="back"><a href="/">&larr; Back to Home</a></div>
+        <h1>Privacy Policy</h1>
+        <p>Last updated: April 27, 2026</p>
+        
+        <h2>1. Overview</h2>
+        <p>Lumina Media is a media streaming application designed for personal use. We prioritize your privacy.</p>
+        
+        <h2>2. Data Collection</h2>
+        <p>We do not collect or store any personal information. All media processing and playback occur locally on your own devices.</p>
+        
+        <h2>3. Third-Party Services</h2>
+        <p>The application may interact with public metadata services to provide information about your media collection. No personal data is transmitted during these interactions.</p>
+        
+        <h2>4. Contact</h2>
+        <p>For questions about this policy, please contact your application administrator.</p>
+    </div>
+</body>
+</html>
+''';
+    await _sendHtml(request, html);
+  }
+
+  Future<void> _handleGoogleVerification(HttpRequest request) async {
+    const content = 'google-site-verification: google69ba675d5947bbe0.html';
+    request.response.headers.set('Content-Type', 'text/html; charset=utf-8');
+    request.response.write(content);
+    await request.response.close();
+  }
+
+  Future<void> _handleTermsOfService(HttpRequest request) async {
+    const html = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Terms of Service - Lumina Media</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f0f12; color: #fff; padding: 40px 20px; line-height: 1.6; }
+        .container { max-width: 800px; margin: 0 auto; background: #1a1a1f; padding: 40px; border-radius: 24px; border: 1px solid rgba(255,255,255,0.05); }
+        h1 { color: #aac7ff; font-weight: 800; letter-spacing: -1px; }
+        h2 { color: #fff; margin-top: 32px; font-size: 20px; }
+        p, li { color: #aaa; font-size: 15px; }
+        .back { margin-bottom: 24px; }
+        a { color: #0a84ff; text-decoration: none; font-weight: 600; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="back"><a href="/">&larr; Back to Home</a></div>
+        <h1>Terms of Service</h1>
+        <p>Last updated: April 27, 2026</p>
+        
+        <h2>1. Acceptance of Terms</h2>
+        <p>By using Lumina Media, you agree to these terms. This application is intended for personal, non-commercial use only.</p>
+        
+        <h2>2. Use of Software</h2>
+        <p>Lumina is a self-hosted media organization tool. You are responsible for the content you host and stream using this software.</p>
+        
+        <h2>3. No Warranty</h2>
+        <p>The software is provided "as is", without warranty of any kind, express or implied. The authors shall not be liable for any claims or damages.</p>
+        
+        <h2>4. Modifications</h2>
+        <p>We reserve the right to modify these terms at any time by updating this page.</p>
+    </div>
+</body>
+</html>
+''';
+    await _sendHtml(request, html);
+  }
+
+  Future<void> _sendHtml(HttpRequest request, String html) async {
+    request.response.headers.set('Content-Type', 'text/html; charset=utf-8');
+    request.response.write(html);
+    await request.response.close();
   }
 
   void _addLog(String message) {

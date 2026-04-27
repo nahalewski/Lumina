@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 import 'cache_service.dart';
 
 enum IptvType { live, movie, series }
@@ -132,6 +134,35 @@ class IptvService {
   final http.Client _client = http.Client();
   final CacheService _cache = CacheService.instance;
 
+  final _logController = StreamController<String>.broadcast();
+  Stream<String> get logStream => _logController.stream;
+
+  File? _logFile;
+
+  void _log(String message) {
+    final timestamp = DateTime.now().toIso8601String().split('T').last.substring(0, 8);
+    final logLine = '[$timestamp] $message';
+    _logController.add(logLine);
+    debugPrint('IPTV: $message');
+    
+    _writeToLogFile(logLine);
+  }
+
+  Future<void> _writeToLogFile(String line) async {
+    try {
+      if (_logFile == null) {
+        final dir = await getApplicationSupportDirectory();
+        _logFile = File('${dir.path}/iptv_debug.log');
+        if (!await _logFile!.exists()) {
+          await _logFile!.create(recursive: true);
+        }
+      }
+      await _logFile!.writeAsString('$line\n', mode: FileMode.append);
+    } catch (e) {
+      debugPrint('Error writing to IPTV log file: $e');
+    }
+  }
+
   String get server => _server;
   String get port => _port;
   String get username => _username;
@@ -159,19 +190,39 @@ class IptvService {
     _password = password;
   }
 
+  String get _normalizedServer {
+    String s = _server.trim();
+    if (s.startsWith('http://')) s = s.substring(7);
+    if (s.startsWith('https://')) s = s.substring(8);
+    // Remove trailing slashes
+    while (s.endsWith('/')) {
+      s = s.substring(0, s.length - 1);
+    }
+    // Remove port if present (will be re-added via :$_port)
+    if (s.contains(':')) {
+      s = s.split(':')[0];
+    }
+    return s;
+  }
+
+  String get _protocol {
+    if (_server.startsWith('http://')) return 'http';
+    return 'https';
+  }
+
   /// M3U URL from the provider
   String get m3uUrl =>
-      "https://$_server:$_port/get.php?username=$_username&password=$_password&type=m3u_plus&output=hls";
+      "$_protocol://$_normalizedServer:$_port/get.php?username=$_username&password=$_password&type=m3u_plus&output=hls";
 
   /// Alternative M3U URL without output=hls
   String get m3uUrlAlt =>
-      "https://$_server:$_port/get.php?username=$_username&password=$_password&type=m3u_plus";
+      "$_protocol://$_normalizedServer:$_port/get.php?username=$_username&password=$_password&type=m3u_plus";
 
   String get epgUrl =>
-      "https://$_server:$_port/xmltv.php?username=$_username&password=$_password";
+      "$_protocol://$_normalizedServer:$_port/xmltv.php?username=$_username&password=$_password";
 
   String get playerApiUrl =>
-      "https://$_server:$_port/player_api.php?username=$_username&password=$_password";
+      "$_protocol://$_normalizedServer:$_port/player_api.php?username=$_username&password=$_password";
 
   /// Full browser-like headers to bypass Cloudflare bot protection
   Map<String, String> get _browserHeaders => {
@@ -181,7 +232,7 @@ class IptvService {
             'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9',
         'Accept-Encoding': 'gzip, deflate',
-        'Referer': 'https://$_server/',
+        'Referer': 'https://$_normalizedServer/',
         'Connection': 'keep-alive',
         'DNT': '1',
         'Upgrade-Insecure-Requests': '1',
@@ -197,14 +248,16 @@ class IptvService {
 
   /// Check if the IPTV server is reachable
   Future<bool> checkServerReachable() async {
+    _log('Checking server reachability...');
     try {
       final url = m3uUrl;
       final response = await _client
           .get(Uri.parse(url), headers: _browserHeaders)
           .timeout(const Duration(seconds: 15));
+      _log('Server reachability check: ${response.statusCode}');
       return response.statusCode == 200;
     } catch (e) {
-      print("IPTV server not reachable: $e");
+      _log("IPTV server not reachable: $e");
       return false;
     }
   }
@@ -214,44 +267,47 @@ class IptvService {
     final cacheKey = 'media:$_server:$_port:$_username';
     if (!forceRefresh) {
       final cached = await _cache.readJson<List<dynamic>>('iptv', cacheKey);
-      if (cached != null) {
+      if (cached != null && cached.isNotEmpty) {
+        debugPrint("IPTV: Loaded ${cached.length} items from cache");
         return cached
             .map((e) => IptvMedia.fromJson(Map<String, dynamic>.from(e as Map)))
             .toList();
       }
     }
     try {
+      _log("Fetching M3U from $m3uUrl");
       // Try primary URL first with overall timeout
       String content =
           await _fetchUrl(m3uUrl).timeout(const Duration(seconds: 40));
       if (content.isEmpty) {
         // Try alternative URL
-        print("IPTV: Primary URL returned empty, trying alternative...");
+        _log("Primary URL returned empty, trying alternative: $m3uUrlAlt");
         content =
             await _fetchUrl(m3uUrlAlt).timeout(const Duration(seconds: 40));
       }
       if (content.isEmpty) {
-        print("IPTV: Both URLs returned empty content");
+        _log("Both URLs returned empty content. Check server/credentials/network.");
         return [];
       }
       // Validate content (check for #EXTM3U)
       if (!content.trim().startsWith('#EXTM3U')) {
-        print("IPTV: Invalid M3U content received. Possibly blocked by VPN or redirected.");
-        if (content.length > 200) {
-          print("IPTV Content Snippet: ${content.substring(0, 200)}");
+        debugPrint("IPTV: Invalid M3U content received. Length: ${content.length}");
+        if (content.length > 500) {
+          debugPrint("IPTV Content Snippet: ${content.substring(0, 500)}");
         } else {
-          print("IPTV Content: $content");
+          debugPrint("IPTV Content: $content");
         }
         return [];
       }
       final parsed = await _enrichWithXtreamArtwork(_parseM3U(content));
+      debugPrint("IPTV: Successfully parsed ${parsed.length} items");
       await _cache.writeJson(
           'iptv', cacheKey, parsed.map((e) => e.toJson()).toList());
       return parsed;
     } on TimeoutException {
-      print("IPTV: Fetch timed out");
+      debugPrint("IPTV: Fetch timed out after 40s");
     } catch (e) {
-      print("Error fetching IPTV media: $e");
+      debugPrint("Error fetching IPTV media: $e");
     }
     return [];
   }
@@ -371,9 +427,11 @@ class IptvService {
 
       if (response.statusCode == 200) {
         return response.body;
+      } else {
+        debugPrint("IPTV: Fetch failed for $url with status: ${response.statusCode}");
       }
     } catch (e) {
-      print("IPTV: Fetch error: $e");
+      debugPrint("IPTV: Fetch error for $url: $e");
     }
     return '';
   }

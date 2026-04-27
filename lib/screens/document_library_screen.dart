@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:archive/archive_io.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -327,6 +328,13 @@ class _DocumentLibraryScreenState extends State<DocumentLibraryScreen> {
                   },
                 );
               }
+              // Ebooks: group by author with horizontal rows per author
+              if (!_isGraphicLibrary) {
+                return _EbooksByAuthorView(
+                  items: items,
+                  onOpen: (item) => _openDocument(item, items),
+                );
+              }
               return _DocumentGrid(
                 items: items,
                 isGraphicLibrary: _isGraphicLibrary,
@@ -445,14 +453,33 @@ class _MangaSeriesView extends StatelessWidget {
 
   const _MangaSeriesView({required this.items, required this.onOpenSeries});
 
+  /// Derive a series name from metadata, then parent folder, then title prefix.
+  static String _seriesKey(DocumentItem item) {
+    if (item.series != null && item.series!.trim().isNotEmpty) {
+      return item.series!.trim();
+    }
+    // Fall back to the immediate parent folder name
+    if (item.path != null) {
+      final parts = item.path!.replaceAll('\\', '/').split('/');
+      if (parts.length >= 2) {
+        final folder = parts[parts.length - 2].trim();
+        if (folder.isNotEmpty) return folder;
+      }
+    }
+    // Last resort: strip volume/chapter numbers from the title
+    return item.title.replaceAll(RegExp(r'\s*(vol\.?|volume|ch\.?|chapter)\s*\d+.*', caseSensitive: false), '').trim().isNotEmpty
+        ? item.title.replaceAll(RegExp(r'\s*(vol\.?|volume|ch\.?|chapter)\s*\d+.*', caseSensitive: false), '').trim()
+        : item.title;
+  }
+
   @override
   Widget build(BuildContext context) {
     final groups = <String, List<DocumentItem>>{};
     for (final item in items) {
-      final key = item.series ?? 'Ungrouped';
+      final key = _seriesKey(item);
       groups.putIfAbsent(key, () => []).add(item);
     }
-    
+
     final seriesNames = groups.keys.toList()..sort();
 
     return GridView.builder(
@@ -636,6 +663,16 @@ class _ComicControls extends StatelessWidget {
   }
 }
 
+/// Scroll behavior that allows mouse-drag horizontal scrolling on desktop.
+class _DesktopScrollBehavior extends MaterialScrollBehavior {
+  @override
+  Set<PointerDeviceKind> get dragDevices => {
+        PointerDeviceKind.touch,
+        PointerDeviceKind.mouse,
+        PointerDeviceKind.trackpad,
+      };
+}
+
 class _ComicsLibraryView extends StatelessWidget {
   final List<DocumentItem> items;
   final _ComicGroupMode groupMode;
@@ -659,67 +696,257 @@ class _ComicsLibraryView extends StatelessWidget {
     final entries = groups.entries.toList()
       ..sort((a, b) => a.key.compareTo(b.key));
 
-    return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),
-      itemCount: entries.length,
-      itemBuilder: (context, index) {
-        final entry = entries[index];
-        final comics = entry.value
-          ..sort((a, b) {
-            final issueA = int.tryParse(a.issue ?? '') ?? 999999;
-            final issueB = int.tryParse(b.issue ?? '') ?? 999999;
-            final issueCompare = issueA.compareTo(issueB);
-            return issueCompare != 0
-                ? issueCompare
-                : a.title.compareTo(b.title);
-          });
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 26),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Card width scales slightly with window — keeps proportions on large displays
+        final cardWidth = (constraints.maxWidth / 6).clamp(130.0, 180.0);
+        final rowHeight = cardWidth * 1.72; // ~2:3 portrait ratio + title
+
+        return ListView.builder(
+          padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),
+          itemCount: entries.length,
+          itemBuilder: (context, index) {
+            final entry = entries[index];
+            final comics = entry.value
+              ..sort((a, b) {
+                final issueA = int.tryParse(a.issue ?? '') ?? 999999;
+                final issueB = int.tryParse(b.issue ?? '') ?? 999999;
+                final cmp = issueA.compareTo(issueB);
+                return cmp != 0 ? cmp : a.title.compareTo(b.title);
+              });
+
+            final scrollController = ScrollController();
+
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 28),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    entry.key,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w800,
-                    ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          entry.key,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        '${comics.length}',
+                        style: const TextStyle(color: Colors.white38),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 10),
-                  Text(
-                    '${comics.length}',
-                    style: const TextStyle(color: Colors.white38),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    height: rowHeight,
+                    child: Scrollbar(
+                      controller: scrollController,
+                      thumbVisibility: true,
+                      child: ScrollConfiguration(
+                        behavior: _DesktopScrollBehavior(),
+                        child: ListView.separated(
+                          controller: scrollController,
+                          scrollDirection: Axis.horizontal,
+                          padding: const EdgeInsets.only(bottom: 12),
+                          itemCount: comics.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(width: 14),
+                          itemBuilder: (context, comicIndex) {
+                            final item = comics[comicIndex];
+                            return SizedBox(
+                              width: cardWidth,
+                              child: _DocumentCard(
+                                item: item,
+                                isManga: true,
+                                showFullArtwork: true,
+                                onTap: () => onOpen(item),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
                   ),
                 ],
               ),
-              const SizedBox(height: 12),
-              SizedBox(
-                height: 282,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: comics.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 16),
-                  itemBuilder: (context, comicIndex) {
-                    final item = comics[comicIndex];
-                    return SizedBox(
-                      width: 164,
-                      child: _DocumentCard(
-                        item: item,
-                        isManga: true,
-                        showFullArtwork: true,
-                        onTap: () => onOpen(item),
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
+            );
+          },
         );
       },
+    );
+  }
+}
+
+/// Ebook library grouped by author — one horizontal row per author.
+class _EbooksByAuthorView extends StatelessWidget {
+  final List<DocumentItem> items;
+  final ValueChanged<DocumentItem> onOpen;
+
+  const _EbooksByAuthorView({required this.items, required this.onOpen});
+
+  @override
+  Widget build(BuildContext context) {
+    final groups = <String, List<DocumentItem>>{};
+    for (final item in items) {
+      final author = item.authors.isNotEmpty ? item.authors.first : 'Unknown Author';
+      groups.putIfAbsent(author, () => []).add(item);
+    }
+    final entries = groups.entries.toList()
+      ..sort((a, b) {
+        if (a.key == 'Unknown Author') return 1;
+        if (b.key == 'Unknown Author') return -1;
+        return a.key.compareTo(b.key);
+      });
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Portrait book cover: ~140 px wide, ~210 px tall image + ~48 px title
+        final cardWidth = (constraints.maxWidth / 7).clamp(120.0, 165.0);
+        final imageHeight = cardWidth * 1.48;
+        final rowHeight = imageHeight + 56; // image + title text
+
+        return ListView.builder(
+          padding: const EdgeInsets.fromLTRB(32, 8, 32, 32),
+          itemCount: entries.length,
+          itemBuilder: (context, index) {
+            final entry = entries[index];
+            final books = entry.value
+              ..sort((a, b) => a.title.compareTo(b.title));
+            final scrollController = ScrollController();
+
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 28),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.person_rounded,
+                          color: Color(0xFFE9B3FF), size: 16),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          entry.key,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 17,
+                            fontWeight: FontWeight.w800,
+                            fontFamily: 'Manrope',
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        '${books.length}',
+                        style: const TextStyle(
+                            color: Colors.white38, fontSize: 13),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    height: rowHeight,
+                    child: Scrollbar(
+                      controller: scrollController,
+                      thumbVisibility: books.length > 4,
+                      child: ScrollConfiguration(
+                        behavior: _DesktopScrollBehavior(),
+                        child: ListView.separated(
+                          controller: scrollController,
+                          scrollDirection: Axis.horizontal,
+                          padding: const EdgeInsets.only(bottom: 10),
+                          itemCount: books.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(width: 14),
+                          itemBuilder: (context, i) {
+                            final item = books[i];
+                            return SizedBox(
+                              width: cardWidth,
+                              child: _EbookCard(
+                                item: item,
+                                imageHeight: imageHeight,
+                                onTap: () => onOpen(item),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+/// Book card with a portrait cover image that fills the image area naturally.
+class _EbookCard extends StatelessWidget {
+  final DocumentItem item;
+  final double imageHeight;
+  final VoidCallback onTap;
+
+  const _EbookCard({
+    required this.item,
+    required this.imageHeight,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            height: imageHeight,
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(10),
+              border:
+                  Border.all(color: Colors.white.withValues(alpha: 0.08)),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: _DocumentCover(
+              item: item,
+              isManga: false,
+              fit: BoxFit.cover,
+            ),
+          ),
+          const SizedBox(height: 7),
+          Text(
+            item.title,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+              fontSize: 12,
+            ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          if (item.rating != null) ...[
+            const SizedBox(height: 2),
+            Text(
+              '★ ${item.rating!.toStringAsFixed(1)}',
+              style: const TextStyle(
+                  color: Color(0xFFE9B3FF), fontSize: 10),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }

@@ -3,7 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @State private var selectedTab = 0
     
-    let categories = ["Live TV", "Movies", "TV Shows", "Settings"]
+    let categories = ["Movies", "TV Shows", "Music", "Live TV", "IPTV Movies", "IPTV Series", "Settings"]
     
     var body: some View {
         ZStack {

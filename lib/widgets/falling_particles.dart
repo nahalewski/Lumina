@@ -1,6 +1,8 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../models/media_model.dart';
+import '../providers/media_provider.dart';
 
 /// A premium particle system for falling sakura flowers
 class FallingFlowersBackground extends StatefulWidget {
@@ -47,7 +49,9 @@ class _FallingFlowersBackgroundState extends State<FallingFlowersBackground> wit
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final showParticles = Provider.of<MediaProvider>(context).showThemeParticles;
+    
+    final background = Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topRight,
@@ -61,22 +65,24 @@ class _FallingFlowersBackgroundState extends State<FallingFlowersBackground> wit
       ),
       child: Stack(
         children: [
-          // Use RepaintBoundary and AnimatedBuilder to isolate background rendering
-          RepaintBoundary(
-            child: AnimatedBuilder(
-              animation: _controller,
-              builder: (context, _) {
-                return CustomPaint(
-                  painter: _FlowerPainter(_flowers, widget.theme),
-                  size: Size.infinite,
-                );
-              },
+          if (showParticles)
+            RepaintBoundary(
+              child: AnimatedBuilder(
+                animation: _controller,
+                builder: (context, _) {
+                  return CustomPaint(
+                    painter: _FlowerPainter(_flowers, widget.theme),
+                    size: Size.infinite,
+                  );
+                },
+              ),
             ),
-          ),
           widget.child,
         ],
       ),
     );
+
+    return background;
   }
 }
 

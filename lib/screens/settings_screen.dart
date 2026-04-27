@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
 import '../providers/media_provider.dart';
@@ -11,6 +13,7 @@ import '../providers/music_provider.dart';
 import '../models/media_model.dart';
 import 'music/manual_match_queue_page.dart';
 import '../widgets/side_nav_bar.dart';
+import '../services/app_update_service.dart';
 import '../services/download_service.dart';
 import '../services/iptv_service.dart';
 import '../services/ebook_manga_metadata_service.dart';
@@ -93,35 +96,32 @@ class SettingsScreen extends StatelessWidget {
                   ),
                 ],
               ),
+              // ── Desktop-only sections ──────────────────────────────
               if (!isAndroid)
                 _buildSection(
                   context,
                   'Artwork & Metadata',
-                  [
-                    _ArtworkScannerTile(),
-                  ],
+                  [_ArtworkScannerTile()],
                 ),
+              if (!isAndroid)
                 _buildSection(
                   context,
                   'Cache',
-                  [
-                    _CacheStorageTile(),
-                  ],
+                  [_CacheStorageTile()],
                 ),
+              if (!isAndroid)
                 _buildSection(
                   context,
                   'Storage',
-                  [
-                    _StorageSettingsTile(),
-                  ],
+                  [_StorageSettingsTile()],
                 ),
+              if (!isAndroid)
                 _buildSection(
                   context,
                   'E-book & Manga Metadata APIs',
-                  [
-                    _DocumentMetadataApiTile(),
-                  ],
+                  [_DocumentMetadataApiTile()],
                 ),
+              if (!isAndroid)
                 _buildSection(
                   context,
                   'Library Organization',
@@ -131,42 +131,41 @@ class SettingsScreen extends StatelessWidget {
                     _DocumentOrganizerTile(type: DocumentLibraryType.ebooks),
                   ],
                 ),
+              if (!isAndroid)
                 _buildSection(
                   context,
                   'Appearance',
-                  [
-                    _ParticleThemeTile(),
-                  ],
+                  [_ParticleThemeTile()],
                 ),
+              if (!isAndroid)
                 _buildSection(
                   context,
                   'Game Art API',
-                  [
-                    _GameArtApiTile(),
-                  ],
+                  [_GameArtApiTile()],
                 ),
+              if (!isAndroid)
                 _buildSection(
                   context,
                   'Media Server & Network',
-                  [
-                    _MediaServerTile(),
-                  ],
+                  [_MediaServerTile()],
                 ),
+              if (!isAndroid)
                 _buildSection(
                   context,
                   'Model Management',
-                  [
-                    _buildModelManager(context),
-                  ],
+                  [_buildModelManager(context)],
                 ),
+              if (!isAndroid)
                 _buildSection(
                   context,
                   'Dependencies',
-                  [
-                    _DependencyManagementTile(),
-                  ],
+                  [_DependencyManagementTile()],
                 ),
+
+              // ── Music Providers (Spotify — both platforms) ─────────
               _MusicProvidersSection(),
+
+              // ── Android-only sections ──────────────────────────────
               if (isAndroid)
                 _buildSection(
                   context,
@@ -176,41 +175,41 @@ class SettingsScreen extends StatelessWidget {
                     _buildServerTokenField(context),
                   ],
                 ),
+              if (isAndroid)
+                _buildSection(
+                  context,
+                  'Updates',
+                  [const _AppUpdateTile()],
+                ),
+
+              // ── IPTV (both platforms) ──────────────────────────────
               _buildSection(
                 context,
                 'IPTV Credentials',
-                [
-                  _IptvCredentialsTile(),
-                ],
+                [_IptvCredentialsTile()],
               ),
               if (!isAndroid)
                 _buildSection(
                   context,
                   'IPTV Proxy Settings',
-                  [
-                    _IptvProxySettingsTile(),
-                  ],
+                  [_IptvProxySettingsTile()],
                 ),
+
+              // ── About (both platforms) ─────────────────────────────
+              _buildSection(
+                context,
+                'About',
+                [const _AboutTile()],
+              ),
+
+              const SizedBox(height: 24),
+              if (!isAndroid) _ApiScrapersSection(),
               if (!isAndroid)
                 _buildSection(
                   context,
-                  'About',
-                  [
-                  _buildInfoRow('Version', '1.0.0'),
-                  if (!isAndroid)
-                    _buildInfoRow('Engine', 'whisper.cpp (v1.8.4)'),
-                  _buildInfoRow('Developer', 'Lumina Labs'),
-                ],
-              ),
-              const SizedBox(height: 24),
-              if (!isAndroid) _ApiScrapersSection(),
-              _buildSection(
-                context,
-                'Secret Menu',
-                [
-                  _SecretMenuTile(),
-                ],
-              ),
+                  'Secret Menu',
+                  [_SecretMenuTile()],
+                ),
               if (!isAndroid) const _PairedDevicesSection(),
               const SizedBox(height: 32),
             ],
@@ -436,32 +435,6 @@ class SettingsScreen extends StatelessWidget {
             onChanged: (TranslationProfile? value) {
               if (value != null) provider.setTranslationProfile(value);
             },
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildInfoRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              color: Colors.white.withOpacity(0.6),
-              fontSize: 14,
-            ),
-          ),
-          Text(
-            value,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-            ),
           ),
         ],
       ),
@@ -1172,6 +1145,26 @@ class _ArtworkScannerTileState extends State<_ArtworkScannerTile> {
                   foregroundColor: const Color(0xFFE9B3FF),
                   side: BorderSide(
                       color: const Color(0xFFE9B3FF).withOpacity(0.3)),
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () => provider.updateMusicArtwork(),
+                icon: const Icon(Icons.music_note_rounded, size: 16),
+                label: const Text(
+                  'Update Music Artwork (API)',
+                  style: TextStyle(fontSize: 12),
+                ),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFAAC7FF),
+                  side: BorderSide(
+                      color: const Color(0xFFAAC7FF).withOpacity(0.3)),
                   padding: const EdgeInsets.symmetric(vertical: 8),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(8)),
@@ -2100,7 +2093,84 @@ class _HealthArcPainter extends CustomPainter {
 }
 
 /// Tile for displaying Media Server status and logs
-class _MediaServerTile extends StatelessWidget {
+class _MediaServerTile extends StatefulWidget {
+  @override
+  State<_MediaServerTile> createState() => _MediaServerTileState();
+}
+
+class _MediaServerTileState extends State<_MediaServerTile> {
+  List<_NetworkAddress> _addresses = [];
+  String _vpnState = '';
+  String? _vpnIp;
+  Timer? _refreshTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+    _refreshTimer = Timer.periodic(const Duration(seconds: 10), (_) => _refresh());
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refresh() async {
+    final addrs = await _getNetworkAddresses();
+    final provider = context.read<MediaProvider>();
+    String vpnState = '';
+    String? vpnIp;
+    if (provider.settings.enablePiaVpn) {
+      vpnState = await provider.piaVpnService.getConnectionState();
+      if (vpnState.toLowerCase() == 'connected') {
+        vpnIp = await provider.piaVpnService.getVpnIp();
+      }
+    }
+    if (mounted) {
+      setState(() {
+        _addresses = addrs;
+        _vpnState = vpnState;
+        _vpnIp = vpnIp;
+      });
+    }
+  }
+
+  Future<List<_NetworkAddress>> _getNetworkAddresses() async {
+    final result = <_NetworkAddress>[];
+    try {
+      final interfaces = await NetworkInterface.list(
+        type: InternetAddressType.IPv4,
+        includeLinkLocal: false,
+      );
+      for (final iface in interfaces) {
+        for (final addr in iface.addresses) {
+          if (addr.isLoopback) continue;
+          final ip = addr.address;
+          // Classify: VPN/tun vs LAN
+          final isVpnLike = iface.name.toLowerCase().contains('tun') ||
+              iface.name.toLowerCase().contains('tap') ||
+              iface.name.toLowerCase().contains('ppp') ||
+              iface.name.toLowerCase().contains('wg') ||
+              ip.startsWith('10.') && _isVpnRange(ip);
+          result.add(_NetworkAddress(
+            ip: ip,
+            interfaceName: iface.name,
+            isVpn: isVpnLike,
+          ));
+        }
+      }
+    } catch (_) {}
+    return result;
+  }
+
+  bool _isVpnRange(String ip) {
+    // PIA typically assigns 10.x.x.x; exclude common LAN 10. subnets
+    // We can't be 100% sure without checking interface name — best effort
+    return false;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Consumer<MediaProvider>(
@@ -2149,15 +2219,130 @@ class _MediaServerTile extends StatelessWidget {
                         ),
                         Text(
                           isRunning
-                              ? 'Local: $localUrl'
-                              : 'Server is stopped. Start it when you want local access.',
-                          style: TextStyle(color: Colors.white38, fontSize: 12),
+                              ? localUrl
+                              : 'Server stopped. Start it for local & remote access.',
+                          style: const TextStyle(color: Colors.white38, fontSize: 12),
                         ),
                       ],
                     ),
                   ),
                 ],
               ),
+              // ── Network Addresses ─────────────────────────────────
+              if (_addresses.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.04),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.white.withOpacity(0.08)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'NETWORK ADDRESSES',
+                        style: TextStyle(
+                          color: Colors.white30,
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 1.1,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      ..._addresses.map((addr) => Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Row(
+                          children: [
+                            Icon(
+                              addr.isVpn
+                                  ? Icons.vpn_lock_rounded
+                                  : Icons.wifi_rounded,
+                              size: 14,
+                              color: addr.isVpn
+                                  ? const Color(0xFF0078D4)
+                                  : const Color(0xFF42E355),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    addr.ip,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 13,
+                                      fontFamily: 'Courier',
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  Text(
+                                    addr.isVpn
+                                        ? '${addr.interfaceName} — VPN'
+                                        : addr.interfaceName,
+                                    style: const TextStyle(
+                                        color: Colors.white38, fontSize: 10),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (isRunning)
+                              _CopyButton(
+                                value: 'http://${addr.ip}:8080',
+                              ),
+                          ],
+                        ),
+                      )),
+                      // VPN status from piactl
+                      if (provider.settings.enablePiaVpn && _vpnState.isNotEmpty) ...[
+                        const Divider(color: Colors.white10, height: 12),
+                        Row(
+                          children: [
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: _vpnState.toLowerCase() == 'connected'
+                                    ? const Color(0xFF42E355)
+                                    : _vpnState.toLowerCase() == 'connecting'
+                                        ? Colors.amber
+                                        : Colors.white30,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              'PIA VPN: $_vpnState',
+                              style: const TextStyle(
+                                  color: Colors.white60, fontSize: 12),
+                            ),
+                            if (_vpnIp != null) ...[
+                              const SizedBox(width: 8),
+                              Text(
+                                '($_vpnIp)',
+                                style: const TextStyle(
+                                  color: Color(0xFF0078D4),
+                                  fontSize: 12,
+                                  fontFamily: 'Courier',
+                                ),
+                              ),
+                            ],
+                            const Spacer(),
+                            GestureDetector(
+                              onTap: _refresh,
+                              child: const Icon(Icons.refresh_rounded,
+                                  size: 14, color: Colors.white30),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 12),
               Row(
                 children: [
@@ -2328,11 +2513,67 @@ class _MediaServerTile extends StatelessWidget {
                         ],
                       ),
                       if (tunnelRunning) ...[
-                        const SizedBox(height: 8),
-                        SelectableText(
-                          provider.tunnelUrl,
-                          style: const TextStyle(
-                              color: Color(0xFF42E355), fontSize: 11),
+                        const SizedBox(height: 12),
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF0A84FF).withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: const Color(0xFF0A84FF).withOpacity(0.2)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  const Icon(Icons.info_outline_rounded, color: Color(0xFF0A84FF), size: 16),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    'Tunnel URL',
+                                    style: TextStyle(
+                                      color: const Color(0xFF0A84FF),
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold,
+                                      letterSpacing: 0.5,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              SelectableText(
+                                provider.tunnelUrl,
+                                style: const TextStyle(
+                                  color: Color(0xFF42E355),
+                                  fontSize: 12,
+                                  fontFamily: 'Courier',
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              const Divider(color: Colors.white10, height: 1),
+                              const SizedBox(height: 10),
+                              const Text(
+                                'TROUBLESHOOTING SSL ERRORS',
+                                style: TextStyle(
+                                  color: Colors.white38,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 1.0,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              const Text(
+                                'If you see ERR_SSL_VERSION_OR_CIPHER_MISMATCH or "This hostname is not covered by a certificate":',
+                                style: TextStyle(color: Colors.white70, fontSize: 11),
+                              ),
+                              const SizedBox(height: 4),
+                              const Text(
+                                '• Ensure the hostname is covered by a TLS certificate in your Cloudflare Dashboard.\n'
+                                '• Cloudflare automatically shows this error on proxied DNS records not covered by a certificate.',
+                                style: TextStyle(color: Colors.white38, fontSize: 11),
+                              ),
+                            ],
+                          ),
                         ),
                       ],
                     ],
@@ -2466,6 +2707,68 @@ class _MediaServerTile extends StatelessWidget {
               ],
               const SizedBox(height: 16),
               const Text(
+                'ANDROID APK UPDATE DISTRIBUTION',
+                style: TextStyle(
+                  color: Colors.white30,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const SizedBox(height: 8),
+              ValueListenableBuilder<String>(
+                valueListenable: provider.mediaServer.updateFolderPath,
+                builder: (context, folderPath, _) {
+                  return Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.03),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.white.withOpacity(0.07)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Drop lumina.apk and update_info.json in the folder below. '
+                          'Android devices will auto-detect and offer the update.',
+                          style: TextStyle(color: Colors.white38, fontSize: 11),
+                        ),
+                        const SizedBox(height: 8),
+                        SelectableText(
+                          folderPath.isEmpty ? 'Start the server to resolve update folder…' : folderPath,
+                          style: const TextStyle(
+                            color: Color(0xFFAAC7FF),
+                            fontSize: 11,
+                            fontFamily: 'Courier',
+                          ),
+                        ),
+                        if (folderPath.isNotEmpty) ...[
+                          const SizedBox(height: 6),
+                          OutlinedButton.icon(
+                            onPressed: () async {
+                              await Process.run('explorer', [folderPath], runInShell: true);
+                            },
+                            icon: const Icon(Icons.folder_open_rounded, size: 14),
+                            label: const Text('Open Folder', style: TextStyle(fontSize: 11)),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: const Color(0xFFAAC7FF),
+                              side: BorderSide(color: const Color(0xFFAAC7FF).withOpacity(0.3)),
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                              minimumSize: Size.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 16),
+              const Text(
                 'LOCAL SERVER DEBUG LOGS',
                 style: TextStyle(
                   color: Colors.white30,
@@ -2544,6 +2847,46 @@ class _MediaServerTile extends StatelessWidget {
           fontSize: 9,
           fontWeight: FontWeight.bold,
           letterSpacing: 0.5,
+        ),
+      ),
+    );
+  }
+}
+
+class _NetworkAddress {
+  final String ip;
+  final String interfaceName;
+  final bool isVpn;
+  const _NetworkAddress({required this.ip, required this.interfaceName, required this.isVpn});
+}
+
+class _CopyButton extends StatefulWidget {
+  final String value;
+  const _CopyButton({required this.value});
+  @override
+  State<_CopyButton> createState() => _CopyButtonState();
+}
+
+class _CopyButtonState extends State<_CopyButton> {
+  bool _copied = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () async {
+        await Clipboard.setData(ClipboardData(text: widget.value));
+        setState(() => _copied = true);
+        Future.delayed(const Duration(seconds: 2), () {
+          if (mounted) setState(() => _copied = false);
+        });
+      },
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 200),
+        child: Icon(
+          _copied ? Icons.check_rounded : Icons.copy_rounded,
+          key: ValueKey(_copied),
+          size: 14,
+          color: _copied ? const Color(0xFF42E355) : Colors.white30,
         ),
       ),
     );
@@ -3609,43 +3952,52 @@ class _ParticleThemeTile extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
-              Icon(Icons.palette_rounded, color: Color(0xFFAAC7FF), size: 20),
-              SizedBox(width: 16),
-              Text(
-                'Background Theme',
-                style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600),
+              const Icon(Icons.palette_rounded, color: Color(0xFFAAC7FF), size: 20),
+              const SizedBox(width: 16),
+              const Expanded(
+                child: Text(
+                  'Background Theme',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600),
+                ),
+              ),
+              Switch(
+                value: provider.showThemeParticles,
+                onChanged: (value) => provider.setShowThemeParticles(value),
+                activeColor: const Color(0xFFAAC7FF),
               ),
             ],
           ),
           const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: _ThemeOption(
-                  label: 'Sakura',
-                  icon: Icons.filter_vintage_rounded,
-                  selected: currentTheme == ParticleTheme.sakura,
-                  color: const Color(0xFFE9B3FF),
-                  onTap: () => provider.setParticleTheme(ParticleTheme.sakura),
+          if (provider.showThemeParticles) ...[
+            Row(
+              children: [
+                Expanded(
+                  child: _ThemeOption(
+                    label: 'Sakura',
+                    icon: Icons.filter_vintage_rounded,
+                    selected: currentTheme == ParticleTheme.sakura,
+                    color: const Color(0xFFE9B3FF),
+                    onTap: () => provider.setParticleTheme(ParticleTheme.sakura),
+                  ),
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _ThemeOption(
-                  label: 'Skulls',
-                  icon: Icons.dangerous,
-                  selected: currentTheme == ParticleTheme.skulls,
-                  color: Colors.white70,
-                  onTap: () => provider.setParticleTheme(ParticleTheme.skulls),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _ThemeOption(
+                    label: 'Skulls',
+                    icon: Icons.dangerous,
+                    selected: currentTheme == ParticleTheme.skulls,
+                    color: Colors.white70,
+                    onTap: () => provider.setParticleTheme(ParticleTheme.skulls),
+                  ),
                 ),
-              ),
-            ],
-          ),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -3699,6 +4051,187 @@ class _ThemeOption extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _MusicLibraryToolsTile extends StatefulWidget {
+  @override
+  State<_MusicLibraryToolsTile> createState() => _MusicLibraryToolsTileState();
+}
+
+class _MusicLibraryToolsTileState extends State<_MusicLibraryToolsTile> {
+  bool _organizedDone = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<MediaProvider>(
+      builder: (context, provider, _) {
+        final isProcessing = provider.isScanningArtwork;
+        final scanned = provider.artworkScanned;
+        final total = provider.artworkTotal;
+
+        return Container(
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.03),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white.withOpacity(0.07)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ── Spotify Processing ──────────────────────────────
+              Row(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1DB954).withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.album_rounded,
+                        color: Color(0xFF1DB954), size: 18),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Process via Spotify',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600),
+                        ),
+                        Text(
+                          'Fetch artwork and correct track/artist names for every song',
+                          style: TextStyle(color: Colors.white38, fontSize: 11),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              if (isProcessing) ...[
+                LinearProgressIndicator(
+                  value: total > 0 ? scanned / total : null,
+                  backgroundColor: Colors.white10,
+                  valueColor:
+                      const AlwaysStoppedAnimation(Color(0xFF1DB954)),
+                  borderRadius: BorderRadius.circular(2),
+                  minHeight: 4,
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Processing $scanned of $total tracks...',
+                  style: const TextStyle(
+                      color: Color(0xFF1DB954), fontSize: 11),
+                ),
+              ] else
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () => provider.processAllMusicViaSpotify(),
+                    icon: const Icon(Icons.sync_rounded, size: 16),
+                    label: const Text('Process All Music via Spotify',
+                        style: TextStyle(fontSize: 12)),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF1DB954),
+                      side: BorderSide(
+                          color: const Color(0xFF1DB954).withOpacity(0.4)),
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8)),
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 16),
+              // ── Auto-Organize ───────────────────────────────────
+              Row(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFAAC7FF).withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.account_tree_rounded,
+                        color: Color(0xFFAAC7FF), size: 18),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Auto-Organize Library',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600),
+                        ),
+                        Text(
+                          'Enriches metadata via Spotify, then moves files into Artist/Album folders on disk.',
+                          style: TextStyle(color: Colors.white38, fontSize: 11),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: isProcessing
+                      ? null
+                      : () async {
+                          await provider.organizeMusicToFolders();
+                          if (mounted) {
+                            setState(() => _organizedDone = true);
+                            Future.delayed(const Duration(seconds: 3), () {
+                              if (mounted) setState(() => _organizedDone = false);
+                            });
+                          }
+                        },
+                  icon: Icon(
+                    _organizedDone
+                        ? Icons.check_circle_rounded
+                        : Icons.sort_rounded,
+                    size: 16,
+                  ),
+                  label: Text(
+                    _organizedDone
+                        ? 'Library Organized!'
+                        : 'Auto-Organize by Artist → Album',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _organizedDone
+                        ? const Color(0xFF42E355)
+                        : const Color(0xFFAAC7FF),
+                    side: BorderSide(
+                      color: (_organizedDone
+                              ? const Color(0xFF42E355)
+                              : const Color(0xFFAAC7FF))
+                          .withOpacity(0.4),
+                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
@@ -3884,6 +4417,9 @@ class _MusicProvidersSection extends StatelessWidget {
             ),
           ],
         ),
+        const SizedBox(height: 16),
+        _buildSectionHeader(context, 'Music Library Tools'),
+        _MusicLibraryToolsTile(),
         const SizedBox(height: 24),
       ],
     );
@@ -3962,4 +4498,401 @@ class _MusicProvidersSection extends StatelessWidget {
     );
   }
 
+}
+
+// ─── About Tile ──────────────────────────────────────────────────────────────
+
+class _AboutTile extends StatefulWidget {
+  const _AboutTile();
+
+  @override
+  State<_AboutTile> createState() => _AboutTileState();
+}
+
+class _AboutTileState extends State<_AboutTile> {
+  String _version = '';
+  String _build = '';
+
+  @override
+  void initState() {
+    super.initState();
+    PackageInfo.fromPlatform().then((info) {
+      if (mounted) {
+        setState(() {
+          _version = info.version;
+          _build = info.buildNumber;
+        });
+      }
+    });
+  }
+
+  Widget _row(IconData icon, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: const Color(0xFFAAC7FF).withOpacity(0.08),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, color: const Color(0xFFAAC7FF), size: 18),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Text(label,
+                style: const TextStyle(color: Colors.white70, fontSize: 13)),
+          ),
+          Text(value,
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isAndroid = Platform.isAndroid;
+    return Column(
+      children: [
+        _row(Icons.info_outline_rounded, 'Version',
+            _version.isEmpty ? '—' : _version),
+        if (_build.isNotEmpty && _build != '1')
+          _row(Icons.build_circle_outlined, 'Build', _build),
+        if (!isAndroid)
+          _row(Icons.psychology_rounded, 'Engine', 'whisper.cpp v1.8.4'),
+        _row(Icons.business_rounded, 'Developer', 'Lumina Labs'),
+      ],
+    );
+  }
+}
+
+// ─── App Update Tile (Android only) ─────────────────────────────────────────
+
+class _AppUpdateTile extends StatefulWidget {
+  const _AppUpdateTile();
+
+  @override
+  State<_AppUpdateTile> createState() => _AppUpdateTileState();
+}
+
+class _AppUpdateTileState extends State<_AppUpdateTile> {
+  final _updateService = AppUpdateService();
+
+  String _currentVersion = '';
+  String _currentBuild = '';
+
+  AppUpdateInfo? _available;
+  bool _checking = false;
+  bool _downloading = false;
+  double _downloadProgress = 0.0;
+  File? _downloadedApk;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadVersion();
+    _autoCheck();
+  }
+
+  Future<void> _loadVersion() async {
+    final info = await PackageInfo.fromPlatform();
+    if (mounted) {
+      setState(() {
+        _currentVersion = info.version;
+        _currentBuild = info.buildNumber;
+      });
+    }
+  }
+
+  Future<void> _autoCheck() async {
+    final remote = context.read<RemoteMediaProvider>();
+    // If the provider already did a background check on connect, use that result
+    if (remote.pendingUpdate != null && mounted) {
+      setState(() => _available = remote.pendingUpdate);
+      return;
+    }
+    final url = remote.customBaseUrl;
+    final token = remote.serverToken;
+    if (url == null || url.isEmpty) return;
+    await _check(url, token ?? '');
+  }
+
+  Future<void> _check(String serverUrl, String token) async {
+    if (_checking) return;
+    setState(() {
+      _checking = true;
+      _error = null;
+      _available = null;
+      _downloadedApk = null;
+    });
+    try {
+      final info = await _updateService.checkForUpdate(serverUrl, token);
+      if (mounted) setState(() => _available = info);
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Check failed: $e');
+    } finally {
+      if (mounted) setState(() => _checking = false);
+    }
+  }
+
+  Future<void> _download(String serverUrl, String token) async {
+    setState(() {
+      _downloading = true;
+      _downloadProgress = 0.0;
+      _error = null;
+    });
+    final file = await _updateService.downloadApk(
+      serverUrl,
+      token,
+      onProgress: (p) {
+        if (mounted) setState(() => _downloadProgress = p);
+      },
+    );
+    if (mounted) {
+      setState(() {
+        _downloading = false;
+        _downloadedApk = file;
+        if (file == null) _error = 'Download failed — check connection.';
+      });
+    }
+  }
+
+  Future<void> _install() async {
+    if (_downloadedApk == null) return;
+    try {
+      await _updateService.installApk(_downloadedApk!);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _error = 'Install failed: $e');
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final remote = context.watch<RemoteMediaProvider>();
+    final serverUrl = remote.customBaseUrl ?? '';
+    final token = remote.serverToken ?? '';
+    final connected = remote.isConnected;
+
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header row
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0A84FF).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(Icons.system_update_rounded,
+                    color: Color(0xFF0A84FF), size: 20),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'App Updates',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600),
+                    ),
+                    Text(
+                      _currentVersion.isEmpty
+                          ? 'Loading version...'
+                          : 'Installed: v$_currentVersion (build $_currentBuild)',
+                      style:
+                          const TextStyle(color: Colors.white38, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 14),
+
+          // Status area
+          if (!connected)
+            _statusChip(
+              Icons.wifi_off_rounded,
+              'Connect to your server to check for updates.',
+              Colors.white30,
+            )
+          else if (_checking)
+            _statusChip(
+              Icons.sync_rounded,
+              'Checking for updates…',
+              const Color(0xFFAAC7FF),
+            )
+          else if (_error != null)
+            _statusChip(Icons.error_outline_rounded, _error!, Colors.redAccent)
+          else if (_downloadedApk != null)
+            _statusChip(
+              Icons.download_done_rounded,
+              'Update downloaded — tap Install to apply.',
+              const Color(0xFF42E355),
+            )
+          else if (_available != null)
+            Container(
+              width: double.infinity,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0A84FF).withOpacity(0.08),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                    color: const Color(0xFF0A84FF).withOpacity(0.25)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.new_releases_rounded,
+                          color: Color(0xFF0A84FF), size: 16),
+                      const SizedBox(width: 6),
+                      Text(
+                        'v${_available!.version} available'
+                        '${_available!.fileSizeLabel.isNotEmpty ? " · ${_available!.fileSizeLabel}" : ""}',
+                        style: const TextStyle(
+                            color: Color(0xFF0A84FF),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600),
+                      ),
+                    ],
+                  ),
+                  if (_available!.releaseNotes.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      _available!.releaseNotes,
+                      style: const TextStyle(
+                          color: Colors.white54, fontSize: 12),
+                    ),
+                  ],
+                ],
+              ),
+            )
+          else
+            _statusChip(
+              Icons.check_circle_rounded,
+              'Up to date.',
+              const Color(0xFF42E355),
+            ),
+
+          // Download progress bar
+          if (_downloading) ...[
+            const SizedBox(height: 10),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: _downloadProgress,
+                backgroundColor: Colors.white10,
+                valueColor:
+                    const AlwaysStoppedAnimation(Color(0xFF0A84FF)),
+                minHeight: 6,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '${(_downloadProgress * 100).toStringAsFixed(0)}% downloaded',
+              style:
+                  const TextStyle(color: Colors.white38, fontSize: 11),
+            ),
+          ],
+
+          const SizedBox(height: 12),
+
+          // Action buttons
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: connected && !_checking && !_downloading
+                      ? () => _check(serverUrl, token)
+                      : null,
+                  icon: const Icon(Icons.refresh_rounded, size: 16),
+                  label: const Text('Check for Updates',
+                      style: TextStyle(fontSize: 12)),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFFAAC7FF),
+                    side: BorderSide(
+                        color: const Color(0xFFAAC7FF).withOpacity(0.3)),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+              ),
+              if (_available != null && _downloadedApk == null && !_downloading) ...[
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => _download(serverUrl, token),
+                    icon: const Icon(Icons.download_rounded, size: 16),
+                    label: const Text('Download',
+                        style: TextStyle(fontSize: 12)),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF0A84FF),
+                      side: BorderSide(
+                          color: const Color(0xFF0A84FF).withOpacity(0.3)),
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8)),
+                    ),
+                  ),
+                ),
+              ],
+              if (_downloadedApk != null) ...[
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _install,
+                    icon: const Icon(Icons.install_mobile_rounded, size: 16),
+                    label: const Text('Install',
+                        style: TextStyle(fontSize: 12)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF42E355),
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8)),
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _statusChip(IconData icon, String message, Color color) {
+    return Row(
+      children: [
+        Icon(icon, size: 14, color: color),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(message,
+              style: TextStyle(color: color, fontSize: 12)),
+        ),
+      ],
+    );
+  }
 }
