@@ -17,8 +17,9 @@ class IptvProvider with ChangeNotifier {
   List<IptvMedia> _movies = [];
   List<IptvMedia> _tvShows = [];
   List<IptvMedia> _recentlyAddedMovies = [];
-  Map<String, Map<String, List<IptvMedia>>> _groupedSeries = {}; // Show -> Season -> Episodes
-  
+  Map<String, Map<String, List<IptvMedia>>> _groupedSeries =
+      {}; // Show -> Season -> Episodes
+
   List<String> _liveGroups = [];
   List<String> _movieGroups = [];
   List<String> _seriesGroups = [];
@@ -29,7 +30,7 @@ class IptvProvider with ChangeNotifier {
   List<IptvMedia> get tvShows => _tvShows;
   List<IptvMedia> get recentlyAddedMovies => _recentlyAddedMovies;
   Map<String, Map<String, List<IptvMedia>>> get groupedSeries => _groupedSeries;
-  
+
   List<String> get liveGroups => _liveGroups;
   List<String> get movieGroups => _movieGroups;
   List<String> get seriesGroups => _seriesGroups;
@@ -51,12 +52,23 @@ class IptvProvider with ChangeNotifier {
   void initialize() {
     _refreshTimer?.cancel();
     Future.microtask(() {
-      loadMedia();
-      loadEpg();
+      try {
+        loadMedia();
+        loadEpg();
+      } catch (e) {
+        // Silently handle initialization errors in release mode
+        _isLoading = false;
+        _lastError = 'Failed to initialize IPTV service';
+        notifyListeners();
+      }
     });
     _refreshTimer = Timer.periodic(const Duration(hours: 1), (_) {
-      loadMedia();
-      loadEpg();
+      try {
+        loadMedia(forceRefresh: true);
+        loadEpg(forceRefresh: true);
+      } catch (e) {
+        // Silently handle refresh errors
+      }
     });
   }
 
@@ -83,11 +95,11 @@ class IptvProvider with ChangeNotifier {
       username: username,
       password: password,
     );
-    loadMedia();
-    loadEpg();
+    loadMedia(forceRefresh: true);
+    loadEpg(forceRefresh: true);
   }
 
-  Future<void> loadMedia() async {
+  Future<void> loadMedia({bool forceRefresh = false}) async {
     if (_isLoading) return;
     _isLoading = true;
     _lastError = null;
@@ -95,7 +107,7 @@ class IptvProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      _allMedia = await _service.fetchMedia();
+      _allMedia = await _service.fetchMedia(forceRefresh: forceRefresh);
       _loadingTimeout?.cancel();
       _hasLoaded = true;
 
@@ -108,36 +120,44 @@ class IptvProvider with ChangeNotifier {
         _groupedSeries = {};
       } else {
         // Use the explicit types from parsing
-        _liveChannels = _allMedia.where((m) => m.type == IptvType.live).toList();
-        _movies = _allMedia.where((m) => m.type == IptvType.movie).toList();
+        _liveChannels =
+            _allMedia.where((m) => m.type == IptvType.live).toList();
+        _movies = _allMedia.where(_isVodMovie).toList();
         _tvShows = _allMedia.where((m) => m.type == IptvType.series).toList();
 
         // If Series is still empty, try to fallback to group-based detection
         if (_tvShows.isEmpty) {
-           _tvShows = _allMedia.where((m) => 
-            !m.isLive && 
-            (m.group.toLowerCase().contains('series') || 
-             m.group.toLowerCase().contains('season') ||
-             m.group.toLowerCase().contains('episode'))
-          ).toList();
-          
+          _tvShows = _allMedia
+              .where((m) =>
+                  !m.isLive &&
+                  (m.group.toLowerCase().contains('series') ||
+                      m.group.toLowerCase().contains('season') ||
+                      m.group.toLowerCase().contains('episode')))
+              .toList();
+
           final seriesUrls = _tvShows.map((s) => s.url).toSet();
           _movies.removeWhere((m) => seriesUrls.contains(m.url));
         }
 
         // Setup groups
-        _liveGroups = _liveChannels.map((m) => m.group).toSet().toList()..sort();
+        _liveGroups = _liveChannels.map((m) => m.group).toSet().toList()
+          ..sort();
         _movieGroups = _movies.map((m) => m.group).toSet().toList()..sort();
         _seriesGroups = _tvShows.map((m) => m.group).toSet().toList()..sort();
 
         // 1. Hierarchical Series Grouping (Show -> Season -> Episode)
         _groupedSeries = {};
         for (final episode in _tvShows) {
-          final sPattern1 = RegExp(r'^(.+?)\s+S(\d+)\s*E(\d+)', caseSensitive: false);
-          final sPattern2 = RegExp(r'^(.+?)\s+S(\d+)E(\d+)', caseSensitive: false);
-          final sPattern3 = RegExp(r'^(.+?)\s+(\d+)x(\d+)', caseSensitive: false);
-          final sPattern4 = RegExp(r'^(.+?)\s+Season\s*(\d+)\s*Episode\s*(\d+)', caseSensitive: false);
-          final sPattern5 = RegExp(r'^(.+?)\s+Part\s*(\d+)', caseSensitive: false);
+          final sPattern1 =
+              RegExp(r'^(.+?)\s+S(\d+)\s*E(\d+)', caseSensitive: false);
+          final sPattern2 =
+              RegExp(r'^(.+?)\s+S(\d+)E(\d+)', caseSensitive: false);
+          final sPattern3 =
+              RegExp(r'^(.+?)\s+(\d+)x(\d+)', caseSensitive: false);
+          final sPattern4 = RegExp(r'^(.+?)\s+Season\s*(\d+)\s*Episode\s*(\d+)',
+              caseSensitive: false);
+          final sPattern5 =
+              RegExp(r'^(.+?)\s+Part\s*(\d+)', caseSensitive: false);
 
           String showName = episode.name;
           String seasonNum = "1";
@@ -164,7 +184,8 @@ class IptvProvider with ChangeNotifier {
             showName = match5.group(1)!.trim();
             seasonNum = "1";
           } else {
-            if (!episode.group.toLowerCase().contains('series') && !episode.group.toLowerCase().contains('tv show')) {
+            if (!episode.group.toLowerCase().contains('series') &&
+                !episode.group.toLowerCase().contains('tv show')) {
               showName = episode.group;
             }
           }
@@ -176,7 +197,8 @@ class IptvProvider with ChangeNotifier {
 
         // 2. Setup Recently Added (sort by addedDate descending)
         _recentlyAddedMovies = List.from(_movies)
-          ..sort((a, b) => (b.addedDate ?? DateTime(2000)).compareTo(a.addedDate ?? DateTime(2000)));
+          ..sort((a, b) => (b.addedDate ?? DateTime(2000))
+              .compareTo(a.addedDate ?? DateTime(2000)));
         if (_recentlyAddedMovies.length > 50) {
           _recentlyAddedMovies = _recentlyAddedMovies.sublist(0, 50);
         }
@@ -191,13 +213,13 @@ class IptvProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> loadEpg() async {
+  Future<void> loadEpg({bool forceRefresh = false}) async {
     if (_isLoadingEpg) return;
     _isLoadingEpg = true;
     notifyListeners();
 
     try {
-      _epgEntries = await _service.fetchEpg();
+      _epgEntries = await _service.fetchEpg(forceRefresh: forceRefresh);
     } catch (e) {
       print("IPTV EPG error: $e");
     }
@@ -215,7 +237,8 @@ class IptvProvider with ChangeNotifier {
     if (tvgId == null || tvgId.isEmpty) return null;
     final now = DateTime.now();
     try {
-      final channelEntries = _epgEntries.where((e) => e.channelId == tvgId).toList();
+      final channelEntries =
+          _epgEntries.where((e) => e.channelId == tvgId).toList();
       return channelEntries.firstWhere(
         (e) => e.start.isBefore(now) && e.end.isAfter(now),
       );
@@ -227,6 +250,15 @@ class IptvProvider with ChangeNotifier {
   @override
   void dispose() {
     _refreshTimer?.cancel();
+    _loadingTimeout?.cancel();
     super.dispose();
+  }
+
+  bool _isVodMovie(IptvMedia media) {
+    if (media.type != IptvType.movie) return false;
+    final url = media.url.toLowerCase();
+    if (url.contains('/live/')) return false;
+    if (url.contains('/movie/')) return true;
+    return ['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v'].any(url.contains);
   }
 }

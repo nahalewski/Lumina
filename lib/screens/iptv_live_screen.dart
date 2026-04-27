@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../providers/iptv_provider.dart';
@@ -12,9 +13,32 @@ class IptvLiveScreen extends StatefulWidget {
   State<IptvLiveScreen> createState() => _IptvLiveScreenState();
 }
 
-class _IptvLiveScreenState extends State<IptvLiveScreen> {
+class _IptvLiveScreenState extends State<IptvLiveScreen> with TickerProviderStateMixin {
   String _searchQuery = '';
   bool _isGuideView = true;
+  late TabController _tabController;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 3, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+  final List<String> _filterOptions = [
+    'USA',
+    'Latino',
+    'Sports',
+    'Movies',
+    'XXX',
+    'News',
+    'Kids'
+  ];
+  final Set<String> _selectedFilters = {};
 
   @override
   Widget build(BuildContext context) {
@@ -22,9 +46,22 @@ class _IptvLiveScreenState extends State<IptvLiveScreen> {
       builder: (context, provider, _) {
         return Column(
           children: [
+            // Tab Bar
+            TabBar(
+              controller: _tabController,
+              labelColor: const Color(0xFFE9B3FF),
+              unselectedLabelColor: Colors.white54,
+              indicatorColor: const Color(0xFFE9B3FF),
+              tabs: const [
+                Tab(text: 'Live'),
+                Tab(text: 'Movies'),
+                Tab(text: 'Series'),
+              ],
+            ),
+            
             // Header with View Toggle
             Padding(
-              padding: const EdgeInsets.fromLTRB(32, 24, 32, 16),
+              padding: const EdgeInsets.fromLTRB(32, 16, 32, 16),
               child: Row(
                 children: [
                   Container(
@@ -85,45 +122,118 @@ class _IptvLiveScreenState extends State<IptvLiveScreen> {
                     icon: const Icon(Icons.refresh_rounded,
                         color: Colors.white54),
                     onPressed: () {
-                      provider.loadMedia();
-                      provider.loadEpg();
+                      provider.loadMedia(forceRefresh: true);
+                      provider.loadEpg(forceRefresh: true);
                     },
                   ),
                 ],
               ),
             ),
 
-            // Search (only if not in Guide View or maybe we keep it?)
-            if (!_isGuideView)
-              Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 32, vertical: 8),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.05),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: TextField(
-                    style: const TextStyle(color: Colors.white),
-                    decoration: const InputDecoration(
-                      hintText: 'Search channels...',
-                      prefixIcon: Icon(Icons.search, color: Colors.white24),
-                      border: InputBorder.none,
-                      contentPadding: EdgeInsets.symmetric(vertical: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 8),
+              child: Column(
+                children: [
+                  Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.05),
+                      borderRadius: BorderRadius.circular(12),
                     ),
-                    onChanged: (v) => setState(() => _searchQuery = v),
+                    child: TextField(
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        hintText: 'Search channels...',
+                        hintStyle: const TextStyle(color: Colors.white38),
+                        prefixIcon:
+                            const Icon(Icons.search, color: Colors.white24),
+                        suffixIcon: _searchQuery.isEmpty
+                            ? null
+                            : IconButton(
+                                icon: const Icon(Icons.close_rounded,
+                                    color: Colors.white24, size: 18),
+                                onPressed: () =>
+                                    setState(() => _searchQuery = ''),
+                              ),
+                        border: InputBorder.none,
+                        contentPadding:
+                            const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                      onChanged: (v) => setState(() => _searchQuery = v),
+                    ),
                   ),
-                ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    height: 34,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: _filterOptions.length,
+                      separatorBuilder: (_, __) => const SizedBox(width: 8),
+                      itemBuilder: (context, index) {
+                        final filter = _filterOptions[index];
+                        final selected = _selectedFilters.contains(filter);
+                        return ChoiceChip(
+                          label: Text(filter,
+                              style: TextStyle(
+                                  color:
+                                      selected ? Colors.black : Colors.white)),
+                          selected: selected,
+                          selectedColor: const Color(0xFFAAC7FF),
+                          backgroundColor: Colors.white.withValues(alpha: 0.06),
+                          onSelected: (_) {
+                            setState(() {
+                              if (selected) {
+                                _selectedFilters.remove(filter);
+                              } else {
+                                _selectedFilters.add(filter);
+                              }
+                            });
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
               ),
+            ),
 
             Expanded(
-              child: provider.isLoading
-                  ? const Center(
-                      child:
-                          CircularProgressIndicator(color: Color(0xFFFF4444)))
-                  : _isGuideView
-                      ? IptvGuideTimeline(provider: provider)
-                      : _buildCategoryView(provider),
+              child: TabBarView(
+                controller: _tabController,
+                children: [
+                  // Live TV
+                  _KeepAliveWrapper(
+                    child: provider.isLoading
+                        ? const Center(
+                            child: CircularProgressIndicator(
+                                color: Color(0xFFFF4444)))
+                        : _isGuideView
+                            ? IptvGuideTimeline(
+                                provider: provider,
+                                channels:
+                                    _filteredChannels(provider.liveChannels),
+                              )
+                            : _buildCategoryView(provider),
+                  ),
+
+                  // Movies
+                  _KeepAliveWrapper(
+                    child: provider.isLoading
+                        ? const Center(
+                            child: CircularProgressIndicator(
+                                color: Color(0xFFFF4444)))
+                        : _buildCategoryViewWithData(provider.movies),
+                  ),
+
+                  // Series
+                  _KeepAliveWrapper(
+                    child: provider.isLoading
+                        ? const Center(
+                            child: CircularProgressIndicator(
+                                color: Color(0xFFFF4444)))
+                        : _buildCategoryViewWithData(provider.tvShows),
+                  ),
+                ],
+              ),
             ),
           ],
         );
@@ -131,21 +241,40 @@ class _IptvLiveScreenState extends State<IptvLiveScreen> {
     );
   }
 
+  List<IptvMedia> _filteredChannels(List<IptvMedia> channels) {
+    final query = _searchQuery.trim().toLowerCase();
+
+    return channels.where((channel) {
+      if (_selectedFilters.isNotEmpty) {
+        final channelGroup = channel.group.toLowerCase();
+        final channelName =
+            channel.tvgName?.toLowerCase() ?? channel.name.toLowerCase();
+        final matchesFilter = _selectedFilters.any((filter) {
+          final lower = filter.toLowerCase();
+          return channelGroup.contains(lower) || channelName.contains(lower);
+        });
+        if (!matchesFilter) return false;
+      }
+
+      if (query.isEmpty) return true;
+      final lowerName =
+          channel.tvgName?.toLowerCase() ?? channel.name.toLowerCase();
+      return lowerName.contains(query) ||
+          channel.group.toLowerCase().contains(query);
+    }).toList();
+  }
+
   Widget _buildCategoryView(IptvProvider provider) {
-    final channels = provider.liveChannels;
-    var filtered = channels;
-    if (_searchQuery.isNotEmpty) {
-      filtered = filtered
-          .where((c) =>
-              c.name.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-              c.group.toLowerCase().contains(_searchQuery.toLowerCase()))
-          .toList();
-    }
+    return _buildCategoryViewWithData(provider.liveChannels);
+  }
+  
+  Widget _buildCategoryViewWithData(List<IptvMedia> mediaList) {
+    final filtered = _filteredChannels(mediaList);
 
     final Map<String, List<IptvMedia>> categoryMap = {};
-    for (final channel in filtered) {
-      categoryMap.putIfAbsent(channel.group, () => []);
-      categoryMap[channel.group]!.add(channel);
+    for (final item in filtered) {
+      categoryMap.putIfAbsent(item.group, () => []);
+      categoryMap[item.group]!.add(item);
     }
     final sortedCategories = categoryMap.keys.toList()..sort();
 
@@ -154,9 +283,9 @@ class _IptvLiveScreenState extends State<IptvLiveScreen> {
       itemCount: sortedCategories.length,
       itemBuilder: (context, index) {
         final category = sortedCategories[index];
-        final categoryChannels = categoryMap[category]!;
+        final categoryItems = categoryMap[category]!;
         return _CategoryRow(
-            category: category, channels: categoryChannels, provider: provider);
+            category: category, channels: categoryItems, provider: Provider.of<IptvProvider>(context, listen: false));
       },
     );
   }
@@ -265,8 +394,8 @@ class _ChannelCard extends StatelessWidget {
                   child: channel.logo.isNotEmpty
                       ? ClipRRect(
                           borderRadius: BorderRadius.circular(8),
-                          child:
-                              Image.network(channel.logo, fit: BoxFit.contain))
+                          child: CachedNetworkImage(
+                              imageUrl: channel.logo, fit: BoxFit.contain))
                       : const Icon(Icons.live_tv, color: Colors.white12),
                 ),
                 const SizedBox(width: 12),
@@ -317,7 +446,9 @@ class _ChannelCard extends StatelessWidget {
 /// The Timeline Guide View
 class IptvGuideTimeline extends StatefulWidget {
   final IptvProvider provider;
-  const IptvGuideTimeline({super.key, required this.provider});
+  final List<IptvMedia> channels;
+  const IptvGuideTimeline(
+      {super.key, required this.provider, required this.channels});
 
   @override
   State<IptvGuideTimeline> createState() => _IptvGuideTimelineState();
@@ -325,9 +456,9 @@ class IptvGuideTimeline extends StatefulWidget {
 
 class _IptvGuideTimelineState extends State<IptvGuideTimeline> {
   late DateTime _startTime;
-  final double _pixelsPerMinute = 3.2;
-  final double _channelRailWidth = 226;
-  final double _rowHeight = 92;
+  final double _pixelsPerMinute = 2.8;
+  final double _channelRailWidth = 206;
+  final double _rowHeight = 76;
   final ScrollController _programVerticalController = ScrollController();
   final ScrollController _channelVerticalController = ScrollController();
   final ScrollController _programHorizontalController = ScrollController();
@@ -445,7 +576,7 @@ class _IptvGuideTimelineState extends State<IptvGuideTimeline> {
 
   @override
   Widget build(BuildContext context) {
-    final channels = widget.provider.liveChannels;
+    final channels = widget.channels;
     if (channels.isEmpty) {
       return const Center(
         child: Text(
@@ -484,7 +615,7 @@ class _IptvGuideTimelineState extends State<IptvGuideTimeline> {
                 child: Column(
                   children: [
                     SizedBox(
-                      height: 54,
+                      height: 46,
                       child: Row(
                         children: [
                           _buildChannelCorner(),
@@ -579,7 +710,7 @@ class _IptvGuideTimelineState extends State<IptvGuideTimeline> {
   Widget _buildChannelCorner() {
     return Container(
       width: _channelRailWidth,
-      padding: const EdgeInsets.symmetric(horizontal: 18),
+      padding: const EdgeInsets.symmetric(horizontal: 14),
       decoration: BoxDecoration(
         color: const Color(0xFF221820).withValues(alpha: 0.92),
         border: Border(
@@ -600,7 +731,7 @@ class _IptvGuideTimelineState extends State<IptvGuideTimeline> {
               letterSpacing: 1.8,
             ),
           ),
-          SizedBox(width: 18),
+          SizedBox(width: 12),
           Text(
             'Channels',
             style: TextStyle(
@@ -695,7 +826,7 @@ class _IptvGuideTimelineState extends State<IptvGuideTimeline> {
 
   Widget _buildChannelRowHeader(IptvMedia channel, int index) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 10),
       decoration: BoxDecoration(
         border: Border(
           bottom: BorderSide(color: Colors.white.withValues(alpha: 0.04)),
@@ -711,12 +842,12 @@ class _IptvGuideTimelineState extends State<IptvGuideTimeline> {
       child: Row(
         children: [
           Container(
-            width: 40,
-            height: 40,
+            width: 32,
+            height: 32,
             alignment: Alignment.center,
             decoration: BoxDecoration(
               color: const Color(0xFFE9B3FF).withValues(alpha: 0.13),
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(10),
               border: Border.all(
                 color: const Color(0xFFE9B3FF).withValues(alpha: 0.22),
               ),
@@ -730,18 +861,18 @@ class _IptvGuideTimelineState extends State<IptvGuideTimeline> {
               ),
             ),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 8),
           if (channel.logo.isNotEmpty)
             ClipRRect(
               borderRadius: BorderRadius.circular(12),
               child: Container(
-                width: 38,
-                height: 38,
+                width: 32,
+                height: 32,
                 color: Colors.black.withValues(alpha: 0.24),
-                child: Image.network(
-                  channel.logo,
+                child: CachedNetworkImage(
+                  imageUrl: channel.logo,
                   fit: BoxFit.contain,
-                  errorBuilder: (_, __, ___) =>
+                  errorWidget: (_, __, ___) =>
                       const Icon(Icons.live_tv, size: 20),
                 ),
               ),
@@ -756,7 +887,7 @@ class _IptvGuideTimelineState extends State<IptvGuideTimeline> {
               ),
               child: const Icon(Icons.live_tv, size: 20, color: Colors.white24),
             ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 8),
           Expanded(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -765,7 +896,7 @@ class _IptvGuideTimelineState extends State<IptvGuideTimeline> {
                 Text(channel.name,
                     style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 13,
+                        fontSize: 12,
                         fontWeight: FontWeight.bold),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis),
@@ -821,8 +952,8 @@ class _IptvGuideTimelineState extends State<IptvGuideTimeline> {
     return Positioned(
       left: left.toDouble(),
       width: (visibleDuration * _pixelsPerMinute - 8).clamp(86.0, 560.0),
-      top: 12,
-      bottom: 12,
+      top: 9,
+      bottom: 9,
       child: _buildProgramBubble(entry, channel),
     );
   }
@@ -830,8 +961,8 @@ class _IptvGuideTimelineState extends State<IptvGuideTimeline> {
   Widget _buildNoGuideBubble(IptvMedia channel) {
     return Positioned(
       left: 12,
-      top: 16,
-      bottom: 16,
+      top: 12,
+      bottom: 12,
       width: 260,
       child: GestureDetector(
         onTap: () {
@@ -840,11 +971,11 @@ class _IptvGuideTimelineState extends State<IptvGuideTimeline> {
           );
         },
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 13),
           alignment: Alignment.centerLeft,
           decoration: BoxDecoration(
             color: Colors.white.withValues(alpha: 0.035),
-            borderRadius: BorderRadius.circular(22),
+            borderRadius: BorderRadius.circular(18),
             border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
           ),
           child: const Text(
@@ -872,14 +1003,14 @@ class _IptvGuideTimelineState extends State<IptvGuideTimeline> {
         );
       },
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
           color: isNow
               ? const Color(0xFFE9B3FF).withValues(alpha: 0.18)
               : isPast
                   ? Colors.white.withValues(alpha: 0.035)
                   : const Color(0xFFAAC7FF).withValues(alpha: 0.07),
-          borderRadius: BorderRadius.circular(22),
+          borderRadius: BorderRadius.circular(18),
           border: Border.all(
             color: isNow
                 ? const Color(0xFFFFD7F5).withValues(alpha: 0.52)
@@ -903,20 +1034,20 @@ class _IptvGuideTimelineState extends State<IptvGuideTimeline> {
               entry.title,
               style: TextStyle(
                 color: isPast ? Colors.white54 : Colors.white,
-                fontSize: 12,
+                fontSize: 11,
                 fontWeight: isNow ? FontWeight.w900 : FontWeight.w700,
               ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 3),
             Text(
               '${DateFormat('h:mm').format(entry.start)} - ${DateFormat('h:mm a').format(entry.end)}',
               style: TextStyle(
                 color: isNow
                     ? const Color(0xFFFFD7F5)
                     : Colors.white.withValues(alpha: 0.28),
-                fontSize: 10,
+                fontSize: 9,
                 fontWeight: FontWeight.w700,
               ),
             ),
@@ -970,4 +1101,23 @@ class _TimelineButton extends StatelessWidget {
       ),
     );
   }
+}
+class _KeepAliveWrapper extends StatefulWidget {
+  final Widget child;
+  const _KeepAliveWrapper({required this.child});
+
+  @override
+  State<_KeepAliveWrapper> createState() => _KeepAliveWrapperState();
+}
+
+class _KeepAliveWrapperState extends State<_KeepAliveWrapper>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return widget.child;
+  }
+
+  @override
+  bool get wantKeepAlive => true;
 }

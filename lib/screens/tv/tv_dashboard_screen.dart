@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:provider/provider.dart';
 import '../../widgets/tv/tv_hero_section.dart';
 import '../../themes/sakura_theme.dart';
@@ -184,12 +185,12 @@ class _TvDashboardScreenState extends State<TvDashboardScreen> {
                   child: Stack(
                     children: [
                       if (logo != null && logo.isNotEmpty)
-                        Image.network(
-                          logo, 
+                        CachedNetworkImage(
+                          imageUrl: logo, 
                           fit: BoxFit.cover, 
                           height: double.infinity, 
                           width: double.infinity, 
-                          errorBuilder: (c, e, s) => _buildPlaceholder(),
+                          errorWidget: (c, u, e) => _buildPlaceholder(),
                         )
                       else
                         _buildPlaceholder(),

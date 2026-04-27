@@ -1,6 +1,10 @@
 import 'dart:convert';
+import 'dart:io';
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_windows/webview_windows.dart' as windows_webview;
 import 'package:provider/provider.dart';
 import '../services/download_service.dart';
 import '../providers/media_provider.dart';
@@ -13,10 +17,14 @@ class WebBrowserScreen extends StatefulWidget {
 }
 
 class _WebBrowserScreenState extends State<WebBrowserScreen> {
-  late final WebViewController _controller;
-  final TextEditingController _urlController = TextEditingController(text: 'https://google.com');
+  WebViewController? _controller;
+  windows_webview.WebviewController? _windowsController;
+  final List<StreamSubscription<dynamic>> _windowsSubscriptions = [];
+  final TextEditingController _urlController =
+      TextEditingController(text: 'https://www.google.com');
   final DownloadService _downloadService = DownloadService();
-  
+  static const String _homeUrl = 'https://www.google.com/webhp?igu=1';
+
   bool _isLoading = true;
   double _progress = 0;
   String? _detectedVideoUrl;
@@ -37,55 +45,106 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
         });
       }
     };
-    
-    _controller = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..addJavaScriptChannel(
-        'VideoSniffer',
-        onMessageReceived: (message) {
-          if (message.message.startsWith('http')) {
-            setState(() {
-              _detectedVideoUrl = message.message;
-            });
-          }
-        },
-      )
-      ..addJavaScriptChannel(
-        'DownloadInterceptor',
-        onMessageReceived: (message) {
-          _handleDownloadIntercepted(message.message);
-        },
-      )
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onProgress: (progress) {
-            setState(() {
-              _progress = progress / 100.0;
-            });
-            _injectVideoSniffer();
-            _injectDownloadInterceptor();
+
+    if (Platform.isAndroid || Platform.isIOS) {
+      _controller = WebViewController()
+        ..setJavaScriptMode(JavaScriptMode.unrestricted)
+        ..addJavaScriptChannel(
+          'VideoSniffer',
+          onMessageReceived: (message) {
+            if (message.message.startsWith('http')) {
+              setState(() {
+                _detectedVideoUrl = message.message;
+              });
+            }
           },
-          onPageStarted: (url) {
-            setState(() {
-              _isLoading = true;
-              _urlController.text = url;
-              _detectedVideoUrl = null;
-            });
+        )
+        ..addJavaScriptChannel(
+          'DownloadInterceptor',
+          onMessageReceived: (message) {
+            _handleDownloadIntercepted(message.message);
           },
-          onPageFinished: (url) {
-            setState(() {
-              _isLoading = false;
-            });
-            _injectVideoSniffer();
-            _injectDownloadInterceptor();
-          },
+        )
+        ..setNavigationDelegate(
+          NavigationDelegate(
+            onProgress: (progress) {
+              setState(() {
+                _progress = progress / 100.0;
+              });
+              _injectVideoSniffer();
+              _injectDownloadInterceptor();
+            },
+            onPageStarted: (url) {
+              setState(() {
+                _isLoading = true;
+                _urlController.text = url;
+                _detectedVideoUrl = null;
+              });
+            },
+            onPageFinished: (url) {
+              setState(() {
+                _isLoading = false;
+              });
+              _injectVideoSniffer();
+              _injectDownloadInterceptor();
+            },
+          ),
+        )
+        ..loadRequest(Uri.parse(_homeUrl));
+    } else if (Platform.isWindows) {
+      _initializeWindowsWebView();
+    }
+  }
+
+  Future<void> _initializeWindowsWebView() async {
+    final controller = windows_webview.WebviewController();
+    _windowsController = controller;
+
+    try {
+      await controller.initialize();
+      await controller.setBackgroundColor(Colors.white);
+      await controller.setPopupWindowPolicy(
+        windows_webview.WebviewPopupWindowPolicy.deny,
+      );
+
+      _windowsSubscriptions.add(controller.url.listen((url) {
+        if (!mounted) return;
+        setState(() {
+          _urlController.text = url;
+        });
+      }));
+      _windowsSubscriptions.add(controller.loadingState.listen((state) {
+        if (!mounted) return;
+        setState(() {
+          _isLoading = state == windows_webview.LoadingState.loading;
+          _progress = _isLoading ? 0.6 : 1;
+        });
+      }));
+
+      await controller.loadUrl(_homeUrl);
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Windows browser could not start: ${e.message ?? e.code}',
+          ),
+          backgroundColor: Colors.redAccent,
         ),
-      )
-      ..loadRequest(Uri.parse('https://google.com'));
+      );
+    }
   }
 
   void _injectVideoSniffer() {
-    _controller.runJavaScript('''
+    _controller?.runJavaScript('''
       (function() {
         function checkVideos() {
           const videos = document.querySelectorAll('video');
@@ -110,7 +169,7 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
   }
 
   void _injectDownloadInterceptor() {
-    _controller.runJavaScript('''
+    _controller?.runJavaScript('''
       (function() {
         // Intercept anchor clicks that look like downloads
         document.addEventListener('click', function(e) {
@@ -205,7 +264,8 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
       builder: (context) => AlertDialog(
         backgroundColor: const Color(0xFF1E1E22),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Download File', style: TextStyle(color: Colors.white, fontSize: 16)),
+        title: const Text('Download File',
+            style: TextStyle(color: Colors.white, fontSize: 16)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -224,14 +284,16 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
             const SizedBox(height: 12),
             Text(
               'Save to: ${_downloadService.downloadDirectory}',
-              style: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 11),
+              style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.4), fontSize: 11),
             ),
           ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+            child:
+                const Text('Cancel', style: TextStyle(color: Colors.white54)),
           ),
           ElevatedButton(
             onPressed: () {
@@ -241,7 +303,8 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFF0A84FF),
               foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
             ),
             child: const Text('Download'),
           ),
@@ -258,11 +321,12 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
 
     try {
       await _downloadService.startDownload(url, fileName: fileName);
-      
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Download started: ${fileName ?? _downloadService.extractFileName(url)}'),
+            content: Text(
+                'Download started: ${fileName ?? _downloadService.extractFileName(url)}'),
             backgroundColor: const Color(0xFF0A84FF),
             duration: const Duration(seconds: 2),
           ),
@@ -287,35 +351,70 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
   }
 
   Future<void> _startDownload() async {
-    if (_detectedVideoUrl == null) return;
-    
-    final title = await _controller.getTitle() ?? 'Downloaded_Anime';
+    if (_detectedVideoUrl == null || _controller == null) return;
+
+    final provider = Provider.of<MediaProvider>(context, listen: false);
+    final title = await _controller!.getTitle() ?? 'Downloaded_Anime';
     final fileName = '${title.replaceAll(RegExp(r'[^\w\s\-]'), '_')}.mp4';
 
     await _startDownloadFromUrl(_detectedVideoUrl!, fileName: fileName);
-    
+
     // Trigger a library refresh
-    Provider.of<MediaProvider>(context, listen: false).scanLibrary();
+    provider.scanLibrary();
   }
 
   void _loadUrl() {
     String url = _urlController.text;
     if (url.isEmpty) return;
-    
+
     // If it doesn't look like a URL, search google
     if (!url.contains('.') || url.contains(' ')) {
       url = 'https://www.google.com/search?q=${Uri.encodeComponent(url)}';
     } else if (!url.startsWith('http')) {
       url = 'https://$url';
     }
-    _controller.loadRequest(Uri.parse(url));
+    _loadBrowserUrl(url);
+  }
+
+  Future<void> _loadBrowserUrl(String url) async {
+    if (_controller != null) {
+      await _controller!.loadRequest(Uri.parse(url));
+      return;
+    }
+    if (_windowsController?.value.isInitialized == true) {
+      await _windowsController!.loadUrl(url);
+    }
+  }
+
+  Future<void> _goBack() async {
+    if (_controller != null) {
+      await _controller!.goBack();
+    } else {
+      await _windowsController?.goBack();
+    }
+  }
+
+  Future<void> _goForward() async {
+    if (_controller != null) {
+      await _controller!.goForward();
+    } else {
+      await _windowsController?.goForward();
+    }
+  }
+
+  Future<void> _reload() async {
+    if (_controller != null) {
+      await _controller!.reload();
+    } else {
+      await _windowsController?.reload();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final activeDownloads = _downloadService.activeDownloadCount;
-    
+
     return Column(
       children: [
         // Address bar with Glassmorphism
@@ -331,9 +430,9 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
             children: [
               Row(
                 children: [
-                  _buildNavButton(Icons.arrow_back_ios_new_rounded, () => _controller.goBack()),
-                  _buildNavButton(Icons.arrow_forward_ios_rounded, () => _controller.goForward()),
-                  _buildNavButton(Icons.refresh_rounded, () => _controller.reload()),
+                  _buildNavButton(Icons.arrow_back_ios_new_rounded, _goBack),
+                  _buildNavButton(Icons.arrow_forward_ios_rounded, _goForward),
+                  _buildNavButton(Icons.refresh_rounded, _reload),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Container(
@@ -341,23 +440,31 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
                       decoration: BoxDecoration(
                         color: Colors.white.withValues(alpha: 0.05),
                         borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                        border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.1)),
                       ),
                       child: TextField(
                         controller: _urlController,
-                        style: const TextStyle(color: Colors.white, fontSize: 13),
+                        style:
+                            const TextStyle(color: Colors.white, fontSize: 13),
                         decoration: InputDecoration(
                           hintText: 'Search or enter URL',
-                          hintStyle: const TextStyle(color: Colors.white24, fontSize: 13),
+                          hintStyle: const TextStyle(
+                              color: Colors.white24, fontSize: 13),
                           border: InputBorder.none,
-                          prefixIcon: const Icon(Icons.search_rounded, size: 16, color: Colors.white24),
-                          suffixIcon: _detectedVideoUrl != null 
-                            ? IconButton(
-                                icon: const Icon(Icons.download_for_offline_rounded, color: Color(0xFFE9B3FF)),
-                                onPressed: _isDownloading ? null : _startDownload,
-                              )
-                            : null,
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                          prefixIcon: const Icon(Icons.search_rounded,
+                              size: 16, color: Colors.white24),
+                          suffixIcon: _detectedVideoUrl != null
+                              ? IconButton(
+                                  icon: const Icon(
+                                      Icons.download_for_offline_rounded,
+                                      color: Color(0xFFE9B3FF)),
+                                  onPressed:
+                                      _isDownloading ? null : _startDownload,
+                                )
+                              : null,
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 10),
                         ),
                         onSubmitted: (_) => _loadUrl(),
                       ),
@@ -368,9 +475,12 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
                   Stack(
                     children: [
                       _buildNavButton(
-                        Icons.download_rounded, 
-                        () => setState(() => _showDownloadManager = !_showDownloadManager),
-                        color: _showDownloadManager ? const Color(0xFF0A84FF) : Colors.white70,
+                        Icons.download_rounded,
+                        () => setState(
+                            () => _showDownloadManager = !_showDownloadManager),
+                        color: _showDownloadManager
+                            ? const Color(0xFF0A84FF)
+                            : Colors.white70,
                       ),
                       if (activeDownloads > 0)
                         Positioned(
@@ -384,7 +494,10 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
                             ),
                             child: Text(
                               '$activeDownloads',
-                              style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold),
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.bold),
                             ),
                           ),
                         ),
@@ -403,7 +516,9 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
                   child: LinearProgressIndicator(
                     value: _isDownloading ? _downloadProgress : _progress,
                     backgroundColor: Colors.white.withValues(alpha: 0.05),
-                    valueColor: AlwaysStoppedAnimation(_isDownloading ? const Color(0xFF42E355) : theme.colorScheme.primary),
+                    valueColor: AlwaysStoppedAnimation(_isDownloading
+                        ? const Color(0xFF42E355)
+                        : theme.colorScheme.primary),
                     minHeight: 2,
                   ),
                 )
@@ -413,13 +528,12 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
           ),
         ),
         // Download Manager Panel
-        if (_showDownloadManager)
-          _buildDownloadManager(),
+        if (_showDownloadManager) _buildDownloadManager(),
         // Web view
         Expanded(
           child: Container(
             color: Colors.white, // Web content background
-            child: WebViewWidget(controller: _controller),
+            child: _buildBrowserView(),
           ),
         ),
       ],
@@ -428,7 +542,7 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
 
   Widget _buildDownloadManager() {
     final tasks = _downloadService.tasks;
-    
+
     return Container(
       height: 280,
       decoration: BoxDecoration(
@@ -449,25 +563,32 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
             ),
             child: Row(
               children: [
-                const Icon(Icons.download_rounded, size: 16, color: Colors.white70),
+                const Icon(Icons.download_rounded,
+                    size: 16, color: Colors.white70),
                 const SizedBox(width: 8),
                 const Text(
                   'Downloads',
-                  style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600),
                 ),
                 const Spacer(),
                 if (tasks.any((t) => t.status == DownloadStatus.completed))
                   TextButton(
                     onPressed: () => _downloadService.clearCompleted(),
-                    child: const Text('Clear Completed', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                    child: const Text('Clear Completed',
+                        style: TextStyle(color: Colors.white54, fontSize: 12)),
                   ),
                 IconButton(
-                  icon: const Icon(Icons.folder_open_rounded, size: 18, color: Colors.white54),
+                  icon: const Icon(Icons.folder_open_rounded,
+                      size: 18, color: Colors.white54),
                   onPressed: () => _downloadService.openDownloadDirectory(),
                   tooltip: 'Open Downloads Folder',
                 ),
                 IconButton(
-                  icon: const Icon(Icons.close_rounded, size: 18, color: Colors.white54),
+                  icon: const Icon(Icons.close_rounded,
+                      size: 18, color: Colors.white54),
                   onPressed: () => setState(() => _showDownloadManager = false),
                 ),
               ],
@@ -476,26 +597,30 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
           // Task list
           Expanded(
             child: tasks.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.download_for_offline_rounded, size: 32, color: Colors.white.withValues(alpha: 0.1)),
-                      const SizedBox(height: 8),
-                      Text(
-                        'No downloads yet',
-                        style: TextStyle(color: Colors.white.withValues(alpha: 0.3), fontSize: 13),
-                      ),
-                    ],
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.download_for_offline_rounded,
+                            size: 32,
+                            color: Colors.white.withValues(alpha: 0.1)),
+                        const SizedBox(height: 8),
+                        Text(
+                          'No downloads yet',
+                          style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.3),
+                              fontSize: 13),
+                        ),
+                      ],
+                    ),
+                  )
+                : ListView.builder(
+                    itemCount: tasks.length,
+                    itemBuilder: (context, index) {
+                      final task = tasks[index];
+                      return _buildDownloadTaskTile(task);
+                    },
                   ),
-                )
-              : ListView.builder(
-                  itemCount: tasks.length,
-                  itemBuilder: (context, index) {
-                    final task = tasks[index];
-                    return _buildDownloadTaskTile(task);
-                  },
-                ),
           ),
         ],
       ),
@@ -514,7 +639,8 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
         statusColor = Colors.orange;
         statusText = 'Pending';
         actionWidget = IconButton(
-          icon: const Icon(Icons.close_rounded, size: 16, color: Colors.white38),
+          icon:
+              const Icon(Icons.close_rounded, size: 16, color: Colors.white38),
           onPressed: () => _downloadService.removeTask(task.id),
         );
         break;
@@ -523,7 +649,8 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
         statusColor = const Color(0xFF0A84FF);
         statusText = '${(task.progress * 100).round()}%';
         actionWidget = IconButton(
-          icon: const Icon(Icons.cancel_rounded, size: 16, color: Colors.white38),
+          icon:
+              const Icon(Icons.cancel_rounded, size: 16, color: Colors.white38),
           onPressed: () => _downloadService.cancelDownload(task.id),
         );
         break;
@@ -535,12 +662,14 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             IconButton(
-              icon: const Icon(Icons.folder_open_rounded, size: 16, color: Colors.white38),
+              icon: const Icon(Icons.folder_open_rounded,
+                  size: 16, color: Colors.white38),
               onPressed: () => _downloadService.openDownloadDirectory(),
               tooltip: 'Show in Finder',
             ),
             IconButton(
-              icon: const Icon(Icons.close_rounded, size: 16, color: Colors.white38),
+              icon: const Icon(Icons.close_rounded,
+                  size: 16, color: Colors.white38),
               onPressed: () => _downloadService.removeTask(task.id),
             ),
           ],
@@ -554,12 +683,14 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             IconButton(
-              icon: const Icon(Icons.refresh_rounded, size: 16, color: Colors.white38),
+              icon: const Icon(Icons.refresh_rounded,
+                  size: 16, color: Colors.white38),
               onPressed: () => _downloadService.retryDownload(task.id),
               tooltip: 'Retry',
             ),
             IconButton(
-              icon: const Icon(Icons.close_rounded, size: 16, color: Colors.white38),
+              icon: const Icon(Icons.close_rounded,
+                  size: 16, color: Colors.white38),
               onPressed: () => _downloadService.removeTask(task.id),
             ),
           ],
@@ -570,7 +701,8 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
         statusColor = Colors.white38;
         statusText = 'Cancelled';
         actionWidget = IconButton(
-          icon: const Icon(Icons.close_rounded, size: 16, color: Colors.white38),
+          icon:
+              const Icon(Icons.close_rounded, size: 16, color: Colors.white38),
           onPressed: () => _downloadService.removeTask(task.id),
         );
         break;
@@ -599,14 +731,17 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
                     child: LinearProgressIndicator(
                       value: task.progress,
                       backgroundColor: Colors.white.withValues(alpha: 0.05),
-                      valueColor: const AlwaysStoppedAnimation(Color(0xFF0A84FF)),
+                      valueColor:
+                          const AlwaysStoppedAnimation(Color(0xFF0A84FF)),
                       minHeight: 3,
                     ),
                   )
                 else
                   Text(
                     statusText,
-                    style: TextStyle(color: statusColor.withValues(alpha: 0.7), fontSize: 11),
+                    style: TextStyle(
+                        color: statusColor.withValues(alpha: 0.7),
+                        fontSize: 11),
                   ),
               ],
             ),
@@ -614,7 +749,10 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
           if (task.status == DownloadStatus.downloading)
             Text(
               statusText,
-              style: TextStyle(color: statusColor, fontSize: 11, fontWeight: FontWeight.bold),
+              style: TextStyle(
+                  color: statusColor,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold),
             ),
           const SizedBox(width: 4),
           actionWidget,
@@ -623,7 +761,8 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
     );
   }
 
-  Widget _buildNavButton(IconData icon, VoidCallback onPressed, {Color? color}) {
+  Widget _buildNavButton(IconData icon, VoidCallback onPressed,
+      {Color? color}) {
     return IconButton(
       icon: Icon(icon, size: 18),
       onPressed: onPressed,
@@ -637,7 +776,7 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
     return Padding(
       padding: const EdgeInsets.only(left: 4),
       child: TextButton(
-        onPressed: () => _controller.loadRequest(Uri.parse(url)),
+        onPressed: () => _loadBrowserUrl(url),
         style: TextButton.styleFrom(
           padding: const EdgeInsets.symmetric(horizontal: 12),
           minimumSize: Size.zero,
@@ -657,7 +796,26 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
 
   @override
   void dispose() {
+    for (final subscription in _windowsSubscriptions) {
+      subscription.cancel();
+    }
+    _windowsController?.dispose();
+    _urlController.dispose();
     _downloadService.dispose();
     super.dispose();
+  }
+
+  Widget _buildBrowserView() {
+    if (_controller != null) {
+      return WebViewWidget(controller: _controller!);
+    }
+
+    if (_windowsController?.value.isInitialized == true) {
+      return windows_webview.Webview(_windowsController!);
+    }
+
+    return const Center(
+      child: CircularProgressIndicator(color: Color(0xFFE9B3FF)),
+    );
   }
 }

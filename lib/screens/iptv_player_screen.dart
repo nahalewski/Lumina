@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:provider/provider.dart';
 import 'package:video_player/video_player.dart';
+import '../providers/iptv_pip_provider.dart';
 import '../services/iptv_service.dart';
 
 /// Full-screen IPTV player for live channels, movies, and TV shows.
@@ -20,69 +23,36 @@ class IptvPlayerScreen extends StatefulWidget {
 }
 
 class _IptvPlayerScreenState extends State<IptvPlayerScreen> {
-  VideoPlayerController? _controller;
-  bool _isInitialized = false;
-  bool _isPlaying = false;
-  bool _hasError = false;
-  String _errorMessage = '';
   bool _showControls = true;
-  double _playbackSpeed = 1.0;
-  double _volume = 1.0;
-  bool _isMuted = false;
   Timer? _controlsTimer;
 
   @override
   void initState() {
     super.initState();
-    _initPlayer();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _initializePip());
+  }
+
+  void _initializePip() {
+    final pip = Provider.of<IptvPipProvider>(context, listen: false);
+    pip.openMedia(widget.media);
   }
 
   @override
   void dispose() {
-    _controller?.removeListener(_onControllerUpdate);
-    _controller?.dispose();
     _controlsTimer?.cancel();
     super.dispose();
   }
 
-  Future<void> _initPlayer() async {
-    try {
-      _controller = VideoPlayerController.networkUrl(Uri.parse(widget.media.url));
-      await _controller!.initialize();
-      _controller!.addListener(_onControllerUpdate);
-      if (mounted) {
-        setState(() => _isInitialized = true);
-        _controller!.play();
-        _startControlsTimer();
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _hasError = true;
-          _errorMessage = e.toString();
-        });
-      }
-    }
-  }
-
-  void _onControllerUpdate() {
-    if (_controller == null) return;
-    final playing = _controller!.value.isPlaying;
-    if (playing != _isPlaying) {
-      setState(() => _isPlaying = playing);
-    }
-    if (_controller!.value.hasError && !_hasError) {
-      setState(() {
-        _hasError = true;
-        _errorMessage = _controller!.value.errorDescription ?? 'Unknown error';
-      });
-    }
+  void _enterPip() {
+    final pip = Provider.of<IptvPipProvider>(context, listen: false);
+    pip.enterPip();
+    Navigator.of(context).pop();
   }
 
   void _startControlsTimer() {
     _controlsTimer?.cancel();
     _controlsTimer = Timer(const Duration(seconds: 4), () {
-      if (mounted && _isPlaying) {
+      if (mounted) {
         setState(() => _showControls = false);
       }
     });
@@ -101,76 +71,79 @@ class _IptvPlayerScreenState extends State<IptvPlayerScreen> {
     return '${m}:${s.toString().padLeft(2, '0')}';
   }
 
-  void _skipForward() {
-    final pos = _controller!.value.position + const Duration(seconds: 10);
-    _controller!.seekTo(pos);
+  void _skipForward(IptvPipProvider pip) {
+    final controller = pip.controller;
+    if (controller == null) return;
+    final pos = controller.value.position + const Duration(seconds: 10);
+    controller.seekTo(pos);
     _startControlsTimer();
   }
 
-  void _skipBackward() {
-    final pos = _controller!.value.position - const Duration(seconds: 10);
-    _controller!.seekTo(pos < Duration.zero ? Duration.zero : pos);
+  void _skipBackward(IptvPipProvider pip) {
+    final controller = pip.controller;
+    if (controller == null) return;
+    final pos = controller.value.position - const Duration(seconds: 10);
+    controller.seekTo(pos < Duration.zero ? Duration.zero : pos);
     _startControlsTimer();
   }
 
-  void _setSpeed(double speed) {
-    setState(() => _playbackSpeed = speed);
-    _controller!.setPlaybackSpeed(speed);
+  Future<void> _setSpeed(double speed) async {
+    final pip = Provider.of<IptvPipProvider>(context, listen: false);
+    await pip.setPlaybackSpeed(speed);
     _startControlsTimer();
   }
 
-  void _setVolume(double vol) {
-    setState(() {
-      _volume = vol;
-      _isMuted = vol == 0;
-    });
-    _controller!.setVolume(vol);
+  Future<void> _setVolume(double vol) async {
+    final pip = Provider.of<IptvPipProvider>(context, listen: false);
+    await pip.setVolume(vol);
   }
 
-  void _toggleMute() {
-    setState(() {
-      _isMuted = !_isMuted;
-      _controller!.setVolume(_isMuted ? 0 : _volume);
-    });
+  Future<void> _toggleMute() async {
+    final pip = Provider.of<IptvPipProvider>(context, listen: false);
+    await pip.setVolume(pip.isMuted ? pip.volume : 0.0);
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.black,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        title: Text(
-          widget.media.name,
-          style: const TextStyle(color: Colors.white, fontSize: 16),
-          overflow: TextOverflow.ellipsis,
-        ),
-        actions: [
-          if (widget.media.logo != null && widget.media.logo!.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(right: 16),
-              child: Image.network(
-                widget.media.logo!,
-                width: 32,
-                height: 32,
-                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-              ),
+    return Consumer<IptvPipProvider>(
+      builder: (context, pip, child) {
+        return Scaffold(
+          backgroundColor: Colors.black,
+          appBar: AppBar(
+            backgroundColor: Colors.black,
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+              onPressed: _enterPip,
             ),
-        ],
-      ),
-      body: _hasError
-          ? _buildErrorState()
-          : _isInitialized
-              ? _buildPlayerWithControls()
-              : _buildLoadingState(),
+            title: Text(
+              widget.media.name,
+              style: const TextStyle(color: Colors.white, fontSize: 16),
+              overflow: TextOverflow.ellipsis,
+            ),
+            actions: [
+              if (widget.media.logo.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(right: 16),
+                  child: CachedNetworkImage(
+                    imageUrl: widget.media.logo,
+                    width: 32,
+                    height: 32,
+                    errorWidget: (_, __, ___) => const SizedBox.shrink(),
+                  ),
+                ),
+            ],
+          ),
+          body: pip.hasError
+              ? _buildErrorState(pip)
+              : pip.isInitialized
+                  ? _buildPlayerWithControls(pip)
+                  : _buildLoadingState(pip),
+        );
+      },
     );
   }
 
-  Widget _buildErrorState() {
+  Widget _buildErrorState(IptvPipProvider pip) {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
@@ -185,18 +158,14 @@ class _IptvPlayerScreenState extends State<IptvPlayerScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              _errorMessage,
+              pip.errorMessage,
               style: const TextStyle(color: Colors.white38, fontSize: 12),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 24),
             ElevatedButton.icon(
               onPressed: () {
-                setState(() {
-                  _hasError = false;
-                  _errorMessage = '';
-                });
-                _initPlayer();
+                pip.openMedia(widget.media);
               },
               icon: const Icon(Icons.refresh_rounded),
               label: const Text('Retry'),
@@ -207,7 +176,7 @@ class _IptvPlayerScreenState extends State<IptvPlayerScreen> {
     );
   }
 
-  Widget _buildLoadingState() {
+  Widget _buildLoadingState(IptvPipProvider pip) {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -227,14 +196,15 @@ class _IptvPlayerScreenState extends State<IptvPlayerScreen> {
     );
   }
 
-  Widget _buildPlayerWithControls() {
+  Widget _buildPlayerWithControls(IptvPipProvider pip) {
+    final controller = pip.controller!;
     return Stack(
       children: [
         // Video player
         Center(
           child: AspectRatio(
-            aspectRatio: _controller!.value.aspectRatio,
-            child: VideoPlayer(_controller!),
+            aspectRatio: controller.value.aspectRatio,
+            child: VideoPlayer(controller),
           ),
         ),
         // Tap to toggle controls
@@ -283,7 +253,7 @@ class _IptvPlayerScreenState extends State<IptvPlayerScreen> {
                       child: Row(
                         children: [
                           Text(
-                            _formatPosition(_controller!.value.position),
+                            _formatPosition(controller.value.position),
                             style: const TextStyle(color: Colors.white70, fontSize: 11),
                           ),
                           Expanded(
@@ -297,17 +267,17 @@ class _IptvPlayerScreenState extends State<IptvPlayerScreen> {
                                 thumbColor: const Color(0xFFE9B3FF),
                               ),
                               child: Slider(
-                                value: _controller!.value.position.inMilliseconds
+                                value: controller.value.position.inMilliseconds
                                     .toDouble()
-                                    .clamp(0, _controller!.value.duration.inMilliseconds.toDouble()),
-                                max: _controller!.value.duration.inMilliseconds.toDouble().clamp(1, double.infinity),
-                                onChanged: (v) => _controller!.seekTo(Duration(milliseconds: v.round())),
+                                    .clamp(0, controller.value.duration.inMilliseconds.toDouble()),
+                                max: controller.value.duration.inMilliseconds.toDouble().clamp(1, double.infinity),
+                                onChanged: (v) => controller.seekTo(Duration(milliseconds: v.round())),
                                 onChangeEnd: (_) => _startControlsTimer(),
                               ),
                             ),
                           ),
                           Text(
-                            _formatPosition(_controller!.value.duration),
+                            _formatPosition(controller.value.duration),
                             style: const TextStyle(color: Colors.white70, fontSize: 11),
                           ),
                         ],
@@ -321,7 +291,7 @@ class _IptvPlayerScreenState extends State<IptvPlayerScreen> {
                       children: [
                         // Speed indicator
                         GestureDetector(
-                          onTap: () => _showSpeedSelector(),
+                          onTap: _showSpeedSelector,
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                             decoration: BoxDecoration(
@@ -329,7 +299,7 @@ class _IptvPlayerScreenState extends State<IptvPlayerScreen> {
                               borderRadius: BorderRadius.circular(4),
                             ),
                             child: Text(
-                              '${_playbackSpeed}x',
+                              '${pip.playbackSpeed}x',
                               style: const TextStyle(color: Color(0xFFE9B3FF), fontSize: 11, fontWeight: FontWeight.w600),
                             ),
                           ),
@@ -338,7 +308,7 @@ class _IptvPlayerScreenState extends State<IptvPlayerScreen> {
                         // Skip backward
                         IconButton(
                           icon: const Icon(Icons.replay_10_rounded, color: Colors.white, size: 28),
-                          onPressed: _skipBackward,
+                          onPressed: () => _skipBackward(pip),
                         ),
                         // Play/Pause
                         Container(
@@ -349,16 +319,12 @@ class _IptvPlayerScreenState extends State<IptvPlayerScreen> {
                           ),
                           child: IconButton(
                             icon: Icon(
-                              _isPlaying ? Icons.pause_circle_filled_rounded : Icons.play_circle_fill_rounded,
+                              pip.isPlaying ? Icons.pause_circle_filled_rounded : Icons.play_circle_fill_rounded,
                               color: const Color(0xFFE9B3FF),
                               size: 48,
                             ),
                             onPressed: () {
-                              if (_isPlaying) {
-                                _controller?.pause();
-                              } else {
-                                _controller?.play();
-                              }
+                              pip.togglePlayPause();
                               _startControlsTimer();
                             },
                           ),
@@ -366,7 +332,7 @@ class _IptvPlayerScreenState extends State<IptvPlayerScreen> {
                         // Skip forward
                         IconButton(
                           icon: const Icon(Icons.forward_10_rounded, color: Colors.white, size: 28),
-                          onPressed: _skipForward,
+                          onPressed: () => _skipForward(pip),
                         ),
                         const Spacer(),
                         // Volume
@@ -375,7 +341,7 @@ class _IptvPlayerScreenState extends State<IptvPlayerScreen> {
                           children: [
                             IconButton(
                               icon: Icon(
-                                _isMuted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+                                pip.isMuted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
                                 color: Colors.white70,
                                 size: 20,
                               ),
@@ -393,9 +359,11 @@ class _IptvPlayerScreenState extends State<IptvPlayerScreen> {
                                   thumbColor: Colors.white,
                                 ),
                                 child: Slider(
-                                  value: _isMuted ? 0 : _volume,
+                                  value: pip.isMuted ? 0 : pip.volume,
                                   max: 1.0,
-                                  onChanged: _setVolume,
+                                  onChanged: (value) async {
+                                    await _setVolume(value);
+                                  },
                                   onChangeEnd: (_) => _startControlsTimer(),
                                 ),
                               ),
@@ -461,26 +429,30 @@ class _IptvPlayerScreenState extends State<IptvPlayerScreen> {
               style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 16),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0].map((speed) {
-                final isSelected = speed == _playbackSpeed;
-                return ChoiceChip(
-                  label: Text('${speed}x'),
-                  selected: isSelected,
-                  onSelected: (_) {
-                    _setSpeed(speed);
-                    Navigator.of(ctx).pop();
-                  },
-                  selectedColor: const Color(0xFFE9B3FF),
-                  backgroundColor: Colors.white.withValues(alpha: 0.05),
-                  labelStyle: TextStyle(
-                    color: isSelected ? Colors.black : Colors.white70,
-                    fontWeight: FontWeight.w600,
-                  ),
+            Consumer<IptvPipProvider>(
+              builder: (context, pip, child) {
+                return Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0].map((speed) {
+                    final isSelected = speed == pip.playbackSpeed;
+                    return ChoiceChip(
+                      label: Text('${speed}x'),
+                      selected: isSelected,
+                      onSelected: (_) {
+                        _setSpeed(speed);
+                        Navigator.of(ctx).pop();
+                      },
+                      selectedColor: const Color(0xFFE9B3FF),
+                      backgroundColor: Colors.white.withValues(alpha: 0.05),
+                      labelStyle: TextStyle(
+                        color: isSelected ? Colors.black : Colors.white70,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    );
+                  }).toList(),
                 );
-              }).toList(),
+              },
             ),
             const SizedBox(height: 16),
           ],

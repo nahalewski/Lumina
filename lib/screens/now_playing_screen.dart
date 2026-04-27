@@ -796,6 +796,12 @@ class _TopControls extends StatelessWidget {
                 );
               },
             ),
+            const SizedBox(width: 4),
+            _IconButton(
+              icon: Icons.queue_music_rounded,
+              tooltip: 'Playback Queue',
+              onPressed: onToggleQueue,
+            ),
             const SizedBox(width: 8),
             Tooltip(
               message: provider.displayOptions.showJapanese ? 'Hide Japanese' : 'Show Japanese',
@@ -835,12 +841,6 @@ class _TopControls extends StatelessWidget {
             ),
             const SizedBox(width: 4),
             _IconButton(
-              icon: Icons.queue_play_next_rounded,
-              tooltip: 'Playback Queue',
-              onPressed: onToggleQueue,
-            ),
-            const SizedBox(width: 4),
-            _IconButton(
               icon: Icons.bug_report_rounded,
               tooltip: 'Engine Debug',
               onPressed: onToggleDebug,
@@ -850,6 +850,32 @@ class _TopControls extends StatelessWidget {
               icon: Icons.closed_caption_rounded,
               tooltip: 'Subtitle Settings',
               onPressed: onToggleSubtitleSettings,
+            ),
+            const SizedBox(width: 4),
+            _IconButton(
+              icon: Icons.airplay_rounded,
+              tooltip: 'AirPlay',
+              onPressed: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Searching for AirPlay devices...'),
+                    backgroundColor: Color(0xFF0A84FF),
+                  ),
+                );
+              },
+            ),
+            const SizedBox(width: 4),
+            _IconButton(
+              icon: Icons.cast_rounded,
+              tooltip: 'Cast to Device',
+              onPressed: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Searching for Casting devices...'),
+                    backgroundColor: Color(0xFFE9B3FF),
+                  ),
+                );
+              },
             ),
           ],
         ),

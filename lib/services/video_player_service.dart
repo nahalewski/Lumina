@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/services.dart';
 
 /// Service that communicates with the native macOS AVPlayer via platform channels
@@ -20,7 +21,7 @@ class VideoPlayerService {
 
   /// Initialize the event stream listener
   void initialize() {
-    if (_initialized) return;
+    if (_initialized || !Platform.isMacOS) return;
     _initialized = true;
     
     _eventSubscription = _eventChannel
@@ -33,6 +34,7 @@ class VideoPlayerService {
 
   /// Open and play a video file
   Future<bool> open(String path) async {
+    if (!Platform.isMacOS) return false;
     try {
       final result = await _methodChannel.invokeMethod<bool>('open', {
         'path': path,
@@ -45,6 +47,7 @@ class VideoPlayerService {
 
   /// Play the video
   Future<void> play() async {
+    if (!Platform.isMacOS) return;
     try {
       await _methodChannel.invokeMethod<void>('play');
     } on PlatformException catch (e) {
@@ -54,6 +57,7 @@ class VideoPlayerService {
 
   /// Pause the video
   Future<void> pause() async {
+    if (!Platform.isMacOS) return;
     try {
       await _methodChannel.invokeMethod<void>('pause');
     } on PlatformException catch (e) {
@@ -63,6 +67,7 @@ class VideoPlayerService {
 
   /// Seek to a position (in milliseconds)
   Future<void> seek(double positionMs) async {
+    if (!Platform.isMacOS) return;
     try {
       await _methodChannel.invokeMethod<void>('seek', {
         'position': positionMs,
@@ -74,6 +79,7 @@ class VideoPlayerService {
 
   /// Set volume (0.0 to 1.0)
   Future<void> setVolume(double volume) async {
+    if (!Platform.isMacOS) return;
     try {
       await _methodChannel.invokeMethod<void>('setVolume', {
         'volume': volume,
@@ -85,6 +91,7 @@ class VideoPlayerService {
 
   /// Close the video player
   Future<void> close() async {
+    if (!Platform.isMacOS) return;
     try {
       await _methodChannel.invokeMethod<void>('close');
     } on PlatformException catch (e) {
@@ -94,6 +101,7 @@ class VideoPlayerService {
 
   /// Get current position in milliseconds
   Future<double> getPosition() async {
+    if (!Platform.isMacOS) return 0.0;
     try {
       final result = await _methodChannel.invokeMethod<double>('getPosition');
       return result ?? 0.0;
@@ -104,6 +112,7 @@ class VideoPlayerService {
 
   /// Get duration in milliseconds
   Future<double> getDuration() async {
+    if (!Platform.isMacOS) return 0.0;
     try {
       final result = await _methodChannel.invokeMethod<double>('getDuration');
       return result ?? 0.0;
@@ -114,6 +123,7 @@ class VideoPlayerService {
 
   /// Check if video is playing
   Future<bool> isPlaying() async {
+    if (!Platform.isMacOS) return false;
     try {
       final result = await _methodChannel.invokeMethod<bool>('isPlaying');
       return result ?? false;

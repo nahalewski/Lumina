@@ -21,14 +21,23 @@ class CloudflareTunnelService {
   /// Uses the existing config at ~/.cloudflared/config.yml.
   Future<bool> start() async {
     if (_process != null) {
-      _addLog('Already running');
-      debugPrint('[CloudflareTunnel] Already running');
-      return true;
+      _addLog('Already running in-app, stopping first...');
+      await stop();
     }
 
     try {
-      final homeDir = Platform.environment['HOME'] ?? '/Users/bennahalewski';
-      final configPath = '$homeDir/.cloudflared/config.yml';
+      final homeDir = Platform.isWindows
+          ? Platform.environment['USERPROFILE']
+          : Platform.environment['HOME'] ?? '/Users/bennahalewski';
+
+      if (homeDir == null) {
+        status.value = 'Home directory not found';
+        return false;
+      }
+
+      final configPath = Platform.isWindows
+          ? '$homeDir\\.cloudflared\\config.yml'
+          : '$homeDir/.cloudflared/config.yml';
 
       if (!await File(configPath).exists()) {
         status.value = 'Config not found at $configPath';
@@ -40,8 +49,23 @@ class CloudflareTunnelService {
       _addLog('Starting cloudflared with config: $configPath');
       debugPrint('[CloudflareTunnel] Starting cloudflared...');
 
+      String cloudflaredExe = 'cloudflared';
+      if (Platform.isWindows) {
+        final possiblePaths = [
+          'C:\\cloudflared-windows-amd64.exe',
+          'C:\\cloudflared.exe',
+          'C:\\Windows\\system32\\cloudflared.exe',
+        ];
+        for (final p in possiblePaths) {
+          if (await File(p).exists()) {
+            cloudflaredExe = p;
+            break;
+          }
+        }
+      }
+
       _process = await Process.start(
-        'cloudflared',
+        cloudflaredExe,
         ['tunnel', '--config', configPath, 'run'],
         runInShell: true,
       );

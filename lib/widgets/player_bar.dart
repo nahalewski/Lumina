@@ -149,23 +149,23 @@ class _PlaybackControls extends StatelessWidget {
             const SizedBox(width: 16),
             _ControlButton(
               icon: Icons.skip_previous_rounded,
-              onPressed: () {},
+              onPressed: mediaProvider.previous,
             ),
             const SizedBox(width: 16),
             _PlayButton(
               isPlaying: isPlaying,
               onPressed: () {
                 if (isPlaying) {
-                  mediaProvider.setPlaybackState(PlaybackState.paused);
+                  mediaProvider.pause();
                 } else {
-                  mediaProvider.setPlaybackState(PlaybackState.playing);
+                  mediaProvider.resume();
                 }
               },
             ),
             const SizedBox(width: 16),
             _ControlButton(
               icon: Icons.skip_next_rounded,
-              onPressed: () {},
+              onPressed: mediaProvider.next,
             ),
             const SizedBox(width: 16),
             _ControlButton(
@@ -212,7 +212,7 @@ class _PlaybackControls extends StatelessWidget {
                             final newPosition = Duration(
                               milliseconds: (duration.inMilliseconds * ratio).round(),
                             );
-                            mediaProvider.setCurrentPosition(newPosition);
+                            mediaProvider.seek(newPosition);
                           },
                           child: Container(
                             height: 4,

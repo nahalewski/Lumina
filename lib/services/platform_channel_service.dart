@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/services.dart';
 
 /// Service that communicates with the native macOS layer via platform channels
@@ -17,6 +18,7 @@ class PlatformChannelService {
 
   /// Extract audio from a video file and return the path to the extracted audio
   Future<String> extractAudio(String videoPath) async {
+    if (!Platform.isMacOS) return '';
     try {
       final result = await _channel.invokeMethod<String>('extractAudio', {
         'videoPath': videoPath,
@@ -29,6 +31,7 @@ class PlatformChannelService {
 
   /// Start live audio capture for real-time transcription
   Future<bool> startLiveTranscription() async {
+    if (!Platform.isMacOS) return false;
     try {
       final result = await _channel.invokeMethod<bool>('startLiveTranscription');
       return result ?? false;
@@ -39,6 +42,7 @@ class PlatformChannelService {
 
   /// Stop live audio capture
   Future<bool> stopLiveTranscription() async {
+    if (!Platform.isMacOS) return false;
     try {
       final result = await _channel.invokeMethod<bool>('stopLiveTranscription');
       return result ?? false;
@@ -72,6 +76,7 @@ class PlatformChannelService {
 
   /// Request microphone permission on macOS
   Future<bool> requestMicrophonePermission() async {
+    if (!Platform.isMacOS) return true; // Assume true or handled elsewhere on Windows
     try {
       final result = await _channel.invokeMethod<bool>('requestMicrophonePermission');
       return result ?? false;
@@ -82,6 +87,7 @@ class PlatformChannelService {
 
   /// Toggle native fullscreen on macOS
   Future<void> toggleFullscreen() async {
+    if (!Platform.isMacOS) return;
     try {
       await _channel.invokeMethod('toggleFullscreen');
     } on PlatformException catch (e) {

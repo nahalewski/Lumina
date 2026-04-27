@@ -191,7 +191,12 @@ class SubtitleEngineService {
 
     try {
       _transcriptionProgressController.add('Extracting audio from video...');
-      final audioPath = await _platformChannel.extractAudio(videoPath);
+      String audioPath = await _platformChannel.extractAudio(videoPath);
+
+      // Windows/Linux Fallback: Use FFmpeg for audio extraction
+      if (audioPath.isEmpty) {
+        audioPath = await _extractAudioFfmpeg(videoPath);
+      }
 
       _transcriptionProgressController.add('Isolating vocals (AI hearing boost)...');
       final cleanAudioPath = await _isolateVocals(audioPath);
@@ -589,5 +594,37 @@ class SubtitleEngineService {
 
     if (onLog != null) onLog!('Vocal isolation failed with exit code $exitCode — using raw audio.');
     return audioPath;
+  }
+
+  Future<String> _extractAudioFfmpeg(String videoPath) async {
+    final tempDir = await getTemporaryDirectory();
+    final outputPath = '${tempDir.path}/extracted_${DateTime.now().millisecondsSinceEpoch}.wav';
+
+    final ffmpegPath = (await File('/opt/homebrew/bin/ffmpeg').exists())
+        ? '/opt/homebrew/bin/ffmpeg'
+        : 'ffmpeg';
+
+    _transcriptionProgressController.add('FFmpeg: Extracting audio stream...');
+
+    final process = await Process.start(ffmpegPath, [
+      '-y',
+      '-i',
+      videoPath,
+      '-vn', // Disable video
+      '-ar',
+      '16000',
+      '-ac',
+      '1',
+      outputPath,
+    ]);
+
+    // Register process for cancellation
+    final baseKey = videoPath.replaceAll(RegExp(r'\.[^.]+$'), '');
+    _activeProcesses.putIfAbsent(baseKey, () => []).add(process);
+
+    final exitCode = await process.exitCode;
+    if (exitCode == 0) return outputPath;
+
+    throw Exception('FFmpeg audio extraction failed (exit $exitCode). Ensure FFmpeg is installed.');
   }
 }

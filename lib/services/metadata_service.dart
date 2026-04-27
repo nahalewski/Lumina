@@ -1,5 +1,7 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../models/media_model.dart';
 import 'anilist_service.dart';
 
@@ -8,8 +10,17 @@ class MetadataService {
   static const String _jikanBaseUrl = 'https://api.jikan.moe/v4';
   static const String _tmdbBaseUrl = 'https://api.themoviedb.org/3';
   static const String _tmdbImageBaseUrl = 'https://image.tmdb.org/t/p/w780';
-  static const String _tmdbApiKey = String.fromEnvironment('TMDB_API_KEY');
+
+  String get _tmdbApiKey => _envValue('TMDB_API_KEY');
+  String get _tmdbAccessToken => _envValue('TMDB_READ_ACCESS_TOKEN');
+
   final AnilistService _anilistService = AnilistService();
+
+  String _envValue(String key) {
+    final defined = String.fromEnvironment(key);
+    if (defined.isNotEmpty) return defined;
+    return Platform.environment[key] ?? dotenv.env[key] ?? '';
+  }
 
   /// Search for anime by title and return the best match
   Future<Map<String, dynamic>?> searchAnime(String query) async {
@@ -68,7 +79,8 @@ class MetadataService {
     final inferredKind = parsed.episode != null ? MediaKind.tv : file.mediaKind;
     final localFile = _applyLocalMetadata(file, parsed, inferredKind);
 
-    if (_tmdbApiKey.isNotEmpty && inferredKind != MediaKind.audio) {
+    if ((_tmdbApiKey.isNotEmpty || _tmdbAccessToken.isNotEmpty) &&
+        inferredKind != MediaKind.audio) {
       final tmdb = inferredKind == MediaKind.tv
           ? await _searchTmdbTv(
               localFile,
@@ -88,15 +100,23 @@ class MetadataService {
         return localFile.copyWith(
           metadataId: 'anilist:${hentai['id']}',
           animeTitle: hentai['title']['english'] ?? hentai['title']['romaji'],
-          showTitle: localFile.showTitle ?? hentai['title']['english'] ?? hentai['title']['romaji'],
+          showTitle: localFile.showTitle ??
+              hentai['title']['english'] ??
+              hentai['title']['romaji'],
           mediaKind: inferredKind,
-          coverArtUrl: hentai['coverImage']['extraLarge'] ?? hentai['coverImage']['large'],
-          posterUrl: hentai['coverImage']['extraLarge'] ?? hentai['coverImage']['large'],
+          coverArtUrl: hentai['coverImage']['extraLarge'] ??
+              hentai['coverImage']['large'],
+          posterUrl: hentai['coverImage']['extraLarge'] ??
+              hentai['coverImage']['large'],
           backdropUrl: hentai['bannerImage'],
-          description: hentai['description']?.replaceAll(RegExp(r'<[^>]*>|&[^;]+;'), ''),
-          synopsis: hentai['description']?.replaceAll(RegExp(r'<[^>]*>|&[^;]+;'), ''),
+          description:
+              hentai['description']?.replaceAll(RegExp(r'<[^>]*>|&[^;]+;'), ''),
+          synopsis:
+              hentai['description']?.replaceAll(RegExp(r'<[^>]*>|&[^;]+;'), ''),
           releaseYear: hentai['seasonYear'],
-          rating: (hentai['averageScore'] as num?)?.toDouble() != null ? (hentai['averageScore'] as num?)!.toDouble() / 10.0 : null,
+          rating: (hentai['averageScore'] as num?)?.toDouble() != null
+              ? (hentai['averageScore'] as num?)!.toDouble() / 10.0
+              : null,
           genres: (hentai['genres'] as List?)?.cast<String>(),
           season: localFile.season,
           episode: localFile.episode,
@@ -114,15 +134,23 @@ class MetadataService {
         return localFile.copyWith(
           metadataId: 'anilist:${anilist['id']}',
           animeTitle: anilist['title']['english'] ?? anilist['title']['romaji'],
-          showTitle: localFile.showTitle ?? anilist['title']['english'] ?? anilist['title']['romaji'],
+          showTitle: localFile.showTitle ??
+              anilist['title']['english'] ??
+              anilist['title']['romaji'],
           mediaKind: inferredKind,
-          coverArtUrl: anilist['coverImage']['extraLarge'] ?? anilist['coverImage']['large'],
-          posterUrl: anilist['coverImage']['extraLarge'] ?? anilist['coverImage']['large'],
+          coverArtUrl: anilist['coverImage']['extraLarge'] ??
+              anilist['coverImage']['large'],
+          posterUrl: anilist['coverImage']['extraLarge'] ??
+              anilist['coverImage']['large'],
           backdropUrl: anilist['bannerImage'],
-          description: anilist['description']?.replaceAll(RegExp(r'<[^>]*>|&[^;]+;'), ''),
-          synopsis: anilist['description']?.replaceAll(RegExp(r'<[^>]*>|&[^;]+;'), ''),
+          description: anilist['description']
+              ?.replaceAll(RegExp(r'<[^>]*>|&[^;]+;'), ''),
+          synopsis: anilist['description']
+              ?.replaceAll(RegExp(r'<[^>]*>|&[^;]+;'), ''),
           releaseYear: anilist['seasonYear'],
-          rating: (anilist['averageScore'] as num?)?.toDouble() != null ? (anilist['averageScore'] as num?)!.toDouble() / 10.0 : null,
+          rating: (anilist['averageScore'] as num?)?.toDouble() != null
+              ? (anilist['averageScore'] as num?)!.toDouble() / 10.0
+              : null,
           genres: (anilist['genres'] as List?)?.cast<String>(),
           season: localFile.season,
           episode: localFile.episode,
@@ -201,9 +229,15 @@ class MetadataService {
   Future<MediaFile?> _searchTmdbMovie(MediaFile file, String query) async {
     try {
       final url = Uri.parse(
-        '$_tmdbBaseUrl/search/movie?api_key=$_tmdbApiKey&query=${Uri.encodeComponent(query)}&include_adult=false',
+        '$_tmdbBaseUrl/search/movie?${_tmdbQueryParameters({
+              'query': query,
+              'include_adult': 'false'
+            })}',
       );
-      final response = await http.get(url);
+      final response = await http.get(
+        url,
+        headers: _tmdbHeaders(),
+      );
       if (response.statusCode != 200) return null;
       final results = jsonDecode(response.body)['results'] as List?;
       if (results == null || results.isEmpty) return null;
@@ -223,9 +257,12 @@ class MetadataService {
   ) async {
     try {
       final url = Uri.parse(
-        '$_tmdbBaseUrl/search/tv?api_key=$_tmdbApiKey&query=${Uri.encodeComponent(query)}',
+        '$_tmdbBaseUrl/search/tv?${_tmdbQueryParameters({'query': query})}',
       );
-      final response = await http.get(url);
+      final response = await http.get(
+        url,
+        headers: _tmdbHeaders(),
+      );
       if (response.statusCode != 200) return null;
       final results = jsonDecode(response.body)['results'] as List?;
       if (results == null || results.isEmpty) return null;
@@ -234,9 +271,14 @@ class MetadataService {
       Map<String, dynamic>? episodeDetails;
       if (parsed.season != null && parsed.episode != null) {
         final episodeUrl = Uri.parse(
-          '$_tmdbBaseUrl/tv/${show['id']}/season/${parsed.season}/episode/${parsed.episode}?api_key=$_tmdbApiKey&append_to_response=credits',
+          '$_tmdbBaseUrl/tv/${show['id']}/season/${parsed.season}/episode/${parsed.episode}?${_tmdbQueryParameters({
+                'append_to_response': 'credits'
+              })}',
         );
-        final episodeResponse = await http.get(episodeUrl);
+        final episodeResponse = await http.get(
+          episodeUrl,
+          headers: _tmdbHeaders(),
+        );
         if (episodeResponse.statusCode == 200) {
           episodeDetails =
               jsonDecode(episodeResponse.body) as Map<String, dynamic>;
@@ -251,9 +293,14 @@ class MetadataService {
 
   Future<Map<String, dynamic>?> _tmdbDetails(String type, dynamic id) async {
     final url = Uri.parse(
-      '$_tmdbBaseUrl/$type/$id?api_key=$_tmdbApiKey&append_to_response=credits,videos',
+      '$_tmdbBaseUrl/$type/$id?${_tmdbQueryParameters({
+            'append_to_response': 'credits,videos'
+          })}',
     );
-    final response = await http.get(url);
+    final response = await http.get(
+      url,
+      headers: _tmdbHeaders(),
+    );
     if (response.statusCode != 200) return null;
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
@@ -357,6 +404,29 @@ class MetadataService {
 
   String? _image(dynamic path) =>
       path == null ? null : '$_tmdbImageBaseUrl$path';
+
+  Map<String, String> _tmdbHeaders() {
+    if (_tmdbAccessToken.isNotEmpty) {
+      return {
+        'Authorization': 'Bearer $_tmdbAccessToken',
+        'accept': 'application/json',
+      };
+    }
+    return {'accept': 'application/json'};
+  }
+
+  String _tmdbQueryParameters(Map<String, String> values) {
+    final params = {
+      ...values,
+      if (_tmdbAccessToken.isEmpty && _tmdbApiKey.isNotEmpty)
+        'api_key': _tmdbApiKey,
+    };
+    return params.entries
+        .map((entry) =>
+            '${Uri.encodeQueryComponent(entry.key)}=${Uri.encodeQueryComponent(entry.value)}')
+        .join('&');
+  }
+
   int? _year(dynamic date) => date is String && date.length >= 4
       ? int.tryParse(date.substring(0, 4))
       : null;

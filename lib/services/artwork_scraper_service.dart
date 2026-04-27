@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import '../models/media_model.dart';
+import 'cache_service.dart';
 
 /// Result of artwork scraping for a media file
 class ArtworkResult {
@@ -25,6 +26,28 @@ class ArtworkResult {
     this.rating,
     this.mediaType,
   });
+
+  Map<String, dynamic> toJson() => {
+        'coverArtUrl': coverArtUrl,
+        'backdropUrl': backdropUrl,
+        'title': title,
+        'description': description,
+        'year': year,
+        'genre': genre,
+        'rating': rating,
+        'mediaType': mediaType,
+      };
+
+  factory ArtworkResult.fromJson(Map<String, dynamic> json) => ArtworkResult(
+        coverArtUrl: json['coverArtUrl'] as String?,
+        backdropUrl: json['backdropUrl'] as String?,
+        title: json['title'] as String?,
+        description: json['description'] as String?,
+        year: json['year'] as int?,
+        genre: json['genre'] as String?,
+        rating: (json['rating'] as num?)?.toDouble(),
+        mediaType: json['mediaType'] as String?,
+      );
 }
 
 /// Service that scrapes artwork and metadata for media files.
@@ -32,16 +55,27 @@ class ArtworkResult {
 class ArtworkScraperService {
   // TMDB API (no key needed for basic search — uses public endpoints)
   static const String _tmdbBase = 'https://api.themoviedb.org/3';
-  static const String _tmdbKey = '1f0d5d5c9c3e8b8f8b8f8b8f8b8f8b8f'; // public demo key
+  static const String _tmdbKey =
+      '1f0d5d5c9c3e8b8f8b8f8b8f8b8f8b8f'; // public demo key
   static const String _jikanBase = 'https://api.jikan.moe/v4';
   static const String _itunesBase = 'https://itunes.apple.com/search';
 
   final Map<String, ArtworkResult> _cache = {};
   final Set<String> _processing = {};
+  final CacheService _persistentCache = CacheService.instance;
 
   /// Get artwork for a media file. Returns cached result if available.
   Future<ArtworkResult?> getArtwork(MediaFile file) async {
     if (_cache.containsKey(file.id)) return _cache[file.id];
+    final cachedJson = await _persistentCache.readJson<Map<String, dynamic>>(
+      'artwork-metadata',
+      file.filePath,
+    );
+    if (cachedJson != null) {
+      final cached = ArtworkResult.fromJson(cachedJson);
+      _cache[file.id] = cached;
+      return cached;
+    }
     if (_processing.contains(file.id)) return null;
 
     _processing.add(file.id);
@@ -62,9 +96,11 @@ class ArtworkScraperService {
 
       if (result != null) {
         _cache[file.id] = result;
+        await _persistentCache.writeJson(
+            'artwork-metadata', file.filePath, result.toJson());
         // Cache artwork locally
         if (result.coverArtUrl != null) {
-          await _cacheArtwork(file.id, result.coverArtUrl!);
+          await _persistentCache.cachedArtworkPath(result.coverArtUrl!);
         }
       }
 
@@ -80,7 +116,8 @@ class ArtworkScraperService {
     if (query.isEmpty) return null;
 
     try {
-      final url = Uri.parse('$_jikanBase/anime?q=${Uri.encodeComponent(query)}&limit=1');
+      final url = Uri.parse(
+          '$_jikanBase/anime?q=${Uri.encodeComponent(query)}&limit=1');
       final response = await http.get(url).timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200) {
@@ -93,7 +130,9 @@ class ArtworkScraperService {
             title: anime['title_english'] ?? anime['title'],
             description: anime['synopsis'],
             year: anime['year'],
-            genre: (anime['genres'] as List?)?.map((g) => g['name'] as String).join(', '),
+            genre: (anime['genres'] as List?)
+                ?.map((g) => g['name'] as String)
+                .join(', '),
             rating: (anime['score'] as num?)?.toDouble(),
             mediaType: 'anime',
           );
@@ -111,8 +150,10 @@ class ArtworkScraperService {
 
     // Try as movie first
     try {
-      final searchUrl = Uri.parse('$_tmdbBase/search/multi?api_key=$_tmdbKey&query=${Uri.encodeComponent(query)}&page=1');
-      final response = await http.get(searchUrl).timeout(const Duration(seconds: 5));
+      final searchUrl = Uri.parse(
+          '$_tmdbBase/search/multi?api_key=$_tmdbKey&query=${Uri.encodeComponent(query)}&page=1');
+      final response =
+          await http.get(searchUrl).timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -123,11 +164,16 @@ class ArtworkScraperService {
           final backdropPath = result['backdrop_path'];
 
           return ArtworkResult(
-            coverArtUrl: posterPath != null ? 'https://image.tmdb.org/t/p/w500$posterPath' : null,
-            backdropUrl: backdropPath != null ? 'https://image.tmdb.org/t/p/w1280$backdropPath' : null,
+            coverArtUrl: posterPath != null
+                ? 'https://image.tmdb.org/t/p/w500$posterPath'
+                : null,
+            backdropUrl: backdropPath != null
+                ? 'https://image.tmdb.org/t/p/w1280$backdropPath'
+                : null,
             title: result['title'] ?? result['name'],
             description: result['overview'],
-            year: _parseYear(result['release_date'] ?? result['first_air_date']),
+            year:
+                _parseYear(result['release_date'] ?? result['first_air_date']),
             genre: null, // Would need a detail call
             rating: (result['vote_average'] as num?)?.toDouble(),
             mediaType: mediaType,
@@ -136,18 +182,28 @@ class ArtworkScraperService {
       }
     } catch (_) {}
 
+    // Fallback: iTunes has reliable public posters for many movies and
+    // gives us a no-key path when TMDB credentials are not configured.
+    if (file.mediaKind == MediaKind.movie || file.isVideo) {
+      final movieResult = await _scrapeItunesMovie(query);
+      if (movieResult != null) return movieResult;
+    }
+
     // Fallback: try iTunes for music
     if (file.isAudio) {
       try {
-        final itunesUrl = Uri.parse('$_itunesBase?term=${Uri.encodeComponent(query)}&limit=1&entity=song');
-        final response = await http.get(itunesUrl).timeout(const Duration(seconds: 5));
+        final itunesUrl = Uri.parse(
+            '$_itunesBase?term=${Uri.encodeComponent(query)}&limit=1&entity=song');
+        final response =
+            await http.get(itunesUrl).timeout(const Duration(seconds: 5));
 
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body);
           if (data['results'] != null && data['results'].isNotEmpty) {
             final track = data['results'][0];
             return ArtworkResult(
-              coverArtUrl: track['artworkUrl100']?.replaceAll('100x100', '600x600'),
+              coverArtUrl:
+                  track['artworkUrl100']?.replaceAll('100x100', '600x600'),
               title: track['trackName'],
               description: track['collectionName'],
               mediaType: 'music',
@@ -158,6 +214,48 @@ class ArtworkScraperService {
     }
 
     return null;
+  }
+
+  Future<ArtworkResult?> _scrapeItunesMovie(String query) async {
+    try {
+      final url = Uri.parse(
+        '$_itunesBase?term=${Uri.encodeComponent(query)}&limit=3&media=movie',
+      );
+      final response = await http.get(url).timeout(const Duration(seconds: 5));
+
+      if (response.statusCode != 200) return null;
+      final data = jsonDecode(response.body);
+      final results = data['results'];
+      if (results is! List || results.isEmpty) return null;
+
+      final movie = results.firstWhere(
+        (item) => item is Map && item['kind'] == 'feature-movie',
+        orElse: () => results.first,
+      );
+      if (movie is! Map) return null;
+
+      final artwork = movie['artworkUrl100']?.toString();
+      final releaseDate = movie['releaseDate']?.toString();
+
+      return ArtworkResult(
+        coverArtUrl: _highResolutionItunesArtwork(artwork),
+        title: movie['trackName']?.toString(),
+        description: movie['longDescription']?.toString() ??
+            movie['shortDescription']?.toString(),
+        year: _parseYear(releaseDate),
+        genre: movie['primaryGenreName']?.toString(),
+        mediaType: 'movie',
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String? _highResolutionItunesArtwork(String? url) {
+    if (url == null || url.isEmpty) return null;
+    return url
+        .replaceAll('100x100bb', '600x900bb')
+        .replaceAll('100x100', '600x900');
   }
 
   /// Cache artwork locally so it persists
@@ -175,7 +273,8 @@ class ArtworkScraperService {
       // Don't re-download if already cached
       if (await File(cachePath).exists()) return cachePath;
 
-      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
+      final response =
+          await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) {
         await File(cachePath).writeAsBytes(response.bodyBytes);
         return cachePath;
@@ -192,7 +291,8 @@ class ArtworkScraperService {
       final cacheDir = Directory('${dir.path}/artwork_cache');
       if (!await cacheDir.exists()) return null;
 
-      final files = await cacheDir.list().where((f) => f.path.contains(mediaId)).toList();
+      final files =
+          await cacheDir.list().where((f) => f.path.contains(mediaId)).toList();
       if (files.isNotEmpty) {
         return files.first.path;
       }
@@ -215,12 +315,22 @@ class ArtworkScraperService {
 
   /// Sanitize filename to get a clean search query
   String _sanitizeQuery(String query) {
-    String result = query.replaceAll(RegExp(r'\.(mp4|mkv|avi|mov|webm|mp3|wav|flac|aac|ogg|m4a)$', caseSensitive: false), '');
+    String result = query.replaceAll(
+        RegExp(r'\.(mp4|mkv|avi|mov|webm|mp3|wav|flac|aac|ogg|m4a)$',
+            caseSensitive: false),
+        '');
     result = result.replaceAll(RegExp(r'\[.*?\]'), ''); // Remove [SubGroup]
-    result = result.replaceAll(RegExp(r'\(.*?\)'), ''); // Remove (Year)
-    result = result.replaceAll(RegExp(r'S\d+E\d+', caseSensitive: false), ''); // Remove S01E01
-    result = result.replaceAll(RegExp(r'\b(h264|x264|hevc|x265|1080p|720p|bluray|multi|sub|dub|web-dl|webrip|brrip)\b', caseSensitive: false), '');
-    result = result.replaceAll(RegExp(r'[\._\-]'), ' '); // Replace separators with spaces
+    result =
+        result.replaceAll(RegExp(r'\((?:19|20)\d{2}\)'), ''); // Remove (Year)
+    result = result.replaceAll(
+        RegExp(r'S\d+E\d+', caseSensitive: false), ''); // Remove S01E01
+    result = result.replaceAll(
+        RegExp(
+            r'\b(h264|x264|hevc|x265|1080p|720p|bluray|multi|sub|dub|web-dl|webrip|brrip)\b',
+            caseSensitive: false),
+        '');
+    result = result.replaceAll(
+        RegExp(r'[\._\-]'), ' '); // Replace separators with spaces
     return result.trim();
   }
 

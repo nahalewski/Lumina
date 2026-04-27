@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../themes/sakura_theme.dart';
 
 class TvHeroSection extends StatelessWidget {
@@ -62,7 +63,7 @@ class TvHeroSection extends StatelessWidget {
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(24),
         image: const DecorationImage(
-          image: NetworkImage('https://images.unsplash.com/photo-1536440136628-849c177e76a1?auto=format&fit=crop&w=1200'),
+          image: CachedNetworkImageProvider('https://images.unsplash.com/photo-1536440136628-849c177e76a1?auto=format&fit=crop&w=1200'),
           fit: BoxFit.cover,
         ),
         boxShadow: [

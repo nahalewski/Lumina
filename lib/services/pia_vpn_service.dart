@@ -1,0 +1,75 @@
+import 'dart:io';
+import 'package:flutter/foundation.dart';
+
+/// Service to interact with the Private Internet Access (PIA) VPN CLI (piactl.exe)
+class PiaVpnService {
+  final String _piactlPath = r'C:\Program Files\Private Internet Access\piactl.exe';
+
+  /// Check if the PIA VPN client is installed on the system
+  Future<bool> isInstalled() async {
+    if (!Platform.isWindows) return false;
+    return File(_piactlPath).exists();
+  }
+
+  /// Connect to the VPN. If region is 'custom', uses the provided OVPN file path.
+  Future<void> connect({String region = 'canada', String? customPath}) async {
+    if (!Platform.isWindows) return;
+
+    if (region == 'custom' && customPath != null) {
+      debugPrint('[Vpn] Connecting via custom OVPN profile: $customPath');
+      try {
+        // Try to find openvpn.exe
+        final openVpnPaths = [
+          r'C:\Program Files\OpenVPN\bin\openvpn.exe',
+          r'C:\Program Files (x86)\OpenVPN\bin\openvpn.exe',
+        ];
+        String? openVpnExe;
+        for (final p in openVpnPaths) {
+          if (await File(p).exists()) {
+            openVpnExe = p;
+            break;
+          }
+        }
+        
+        if (openVpnExe == null) {
+          debugPrint('[Vpn] openvpn.exe not found. Ensure OpenVPN is installed.');
+          return;
+        }
+
+        // Start openvpn in background
+        await Process.start(openVpnExe, ['--config', customPath], runInShell: true);
+      } catch (e) {
+        debugPrint('[Vpn] Error starting OpenVPN: $e');
+      }
+      return;
+    }
+
+    if (!await isInstalled()) {
+      debugPrint('[PiaVpn] piactl.exe not found at $_piactlPath');
+      return;
+    }
+
+    try {
+      debugPrint('[PiaVpn] Setting region to $region...');
+      await Process.run(_piactlPath, ['set', 'region', region]);
+      
+      debugPrint('[PiaVpn] Connecting...');
+      await Process.run(_piactlPath, ['connect']);
+    } catch (e) {
+      debugPrint('[PiaVpn] Error during connection: $e');
+    }
+  }
+
+  /// Disconnect from the VPN
+  Future<void> disconnect() async {
+    if (!Platform.isWindows) return;
+    if (!await isInstalled()) return;
+
+    try {
+      debugPrint('[PiaVpn] Disconnecting...');
+      await Process.run(_piactlPath, ['disconnect']);
+    } catch (e) {
+      debugPrint('[PiaVpn] Error during disconnection: $e');
+    }
+  }
+}

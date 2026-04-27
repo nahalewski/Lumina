@@ -1,6 +1,6 @@
 enum ContentType { anime, adult, general }
 
-enum MediaKind { movie, tv, audio }
+enum MediaKind { movie, tv, audio, nsfw, manga, ebook, comic }
 
 enum PlaybackState { idle, loading, playing, paused, buffering, error, stopped }
 
@@ -20,6 +20,7 @@ class MediaFile {
   String? language;
   List<String> subtitleTracks;
   List<String> audioTracks;
+  final String? metadataTitle;
 
   // Plex-style library metadata
   final MediaKind mediaKind;
@@ -42,7 +43,7 @@ class MediaFile {
   final List<String> castPhotoUrls;
   final List<String> directors;
   final List<String> writers;
-  
+
   // Music-specific fields
   final String? artist;
   final String? album;
@@ -100,6 +101,7 @@ class MediaFile {
     this.artist,
     this.album,
     this.trackNumber,
+    this.metadataTitle,
   })  : addedAt = addedAt ?? DateTime.now(),
         contentType = contentType ?? detectContentType(fileName),
         mediaKind = mediaKind ?? detectMediaKind(fileName),
@@ -150,18 +152,23 @@ class MediaFile {
     ];
 
     if (adultKeywords.any((k) => lower.contains(k))) return ContentType.adult;
-    if (animeKeywords.any((k) => lower.contains(k)) || 
-        lower.contains('bleach') || 
+    if (animeKeywords.any((k) => lower.contains(k)) ||
+        lower.contains('bleach') ||
         lower.contains('thousand-year blood war')) return ContentType.anime;
 
     return ContentType.general;
   }
 
-  static MediaKind detectMediaKind(String name) {
+  static MediaKind detectMediaKind(String name, {MediaKind? override}) {
+    if (override != null) return override;
     final lower = name.toLowerCase();
-    if (['.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a'].any(lower.endsWith)) {
+
+    // Priority 1: Clear audio extensions
+    if (['.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a', '.opus'].any(lower.endsWith)) {
       return MediaKind.audio;
     }
+
+    // Priority 2: TV Patterns
     final tvPatterns = [
       RegExp(r'\bs\d{1,2}e\d{1,3}\b', caseSensitive: false),
       RegExp(r'\b\d{1,2}x\d{1,3}\b', caseSensitive: false),
@@ -171,19 +178,35 @@ class MediaFile {
       ),
       RegExp(r'\bep\d{1,3}\b', caseSensitive: false),
       RegExp(r'\bepisode\s*\d{1,3}\b', caseSensitive: false),
-      RegExp(r'\s-\s\d{1,3}\b', caseSensitive: false), // Common anime format: "Show - 01"
+      RegExp(r'\s-\s\d{1,3}\b',
+          caseSensitive: false), // Common anime format: "Show - 01"
     ];
     if (tvPatterns.any((p) => p.hasMatch(name))) return MediaKind.tv;
 
     // Special case for known TV franchises
-    final tvKeywords = ['bleach', 'naruto', 'one piece', 'boruto', 'jujutsu', 'kaisen'];
+    final tvKeywords = [
+      'bleach',
+      'naruto',
+      'one piece',
+      'boruto',
+      'jujutsu',
+      'kaisen'
+    ];
     if (tvKeywords.any((k) => lower.contains(k))) return MediaKind.tv;
+
+    // Priority 3: Books/Manga/Comics
+    if (['.epub', '.pdf', '.mobi'].any(lower.endsWith)) return MediaKind.ebook;
+    if (['.cbz', '.cbr'].any(lower.endsWith)) return MediaKind.comic;
+    if (['.zip', '.rar'].any(lower.endsWith) && (lower.contains('manga') || lower.contains('chapter'))) return MediaKind.manga;
+
+    // Priority 4: Webm can be audio if no TV pattern matched
+    if (lower.endsWith('.webm')) return MediaKind.audio;
 
     return MediaKind.movie;
   }
 
   String get extension => fileName.split('.').last.toLowerCase();
-  String get title => fileName.replaceAll('.$extension', '');
+  String get title => metadataTitle ?? fileName.replaceAll('.$extension', '');
   String get libraryTitle {
     if (mediaKind == MediaKind.audio) {
       return (artist != null) ? '$artist - $title' : title;
@@ -257,6 +280,7 @@ class MediaFile {
         'artist': artist,
         'album': album,
         'trackNumber': trackNumber,
+        'metadataTitle': metadataTitle,
       };
 
   factory MediaFile.fromJson(Map<String, dynamic> json) => MediaFile(
@@ -308,6 +332,7 @@ class MediaFile {
         artist: json['artist'] as String?,
         album: json['album'] as String?,
         trackNumber: json['trackNumber'] as int?,
+        metadataTitle: json['metadataTitle'] as String?,
       );
 
   MediaFile copyWith({
@@ -348,6 +373,7 @@ class MediaFile {
     String? artist,
     String? album,
     int? trackNumber,
+    String? metadataTitle,
   }) {
     return MediaFile(
       id: id,
@@ -393,6 +419,7 @@ class MediaFile {
       artist: artist ?? this.artist,
       album: album ?? this.album,
       trackNumber: trackNumber ?? this.trackNumber,
+      metadataTitle: metadataTitle ?? this.metadataTitle,
     );
   }
 }
@@ -466,18 +493,90 @@ String? _cleanTitle(String? value) {
 
 enum TranslationProfile { standard, adult }
 
+class MediaFolder {
+  final String path;
+  final MediaKind type;
+
+  MediaFolder({required this.path, required this.type});
+
+  Map<String, dynamic> toJson() => {'path': path, 'type': type.index};
+  factory MediaFolder.fromJson(Map<String, dynamic> json) => MediaFolder(
+        path: json['path'],
+        type: MediaKind.values[json['type']],
+      );
+}
+
+enum ParticleTheme { sakura, skulls }
+
 class PlaybackSettings {
   bool isMuted = false;
+  bool autoOrganizeManga = false;
+  bool autoOrganizeComics = false;
+  bool autoOrganizeEbooks = false;
+  ParticleTheme particleTheme = ParticleTheme.sakura;
   double volume = 1.0;
   double playbackSpeed = 1.0;
   bool useOllamaTranslation = true;
   bool autoProcessNewMedia = true;
   bool enableIntro = true;
   bool enableMenuMusic = true;
+  bool showNsfwTab = false;
+  bool keepScreenOn = true;
+  String? movieStoragePath;
+  String? tvShowStoragePath;
+  String? nsfwStoragePath;
   String? musicSavePath;
+  String? ebookStoragePath;
+  String? mangaStoragePath;
+  String? comicsStoragePath;
   String ollamaModel = 'qwen2.5:14b-instruct';
+  int iptvMaxConnections = 2;
+  String iptvUserAgent =
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) LuminaMedia/1.0';
   TranslationProfile translationProfile = TranslationProfile.standard;
   bool isFullscreen = false;
+  bool enablePiaVpn = false;
+  String piaVpnRegion = 'ca-ontario';
+  String? piaVpnCustomPath;
+  String mediaServerToken = '';
+  bool autoStartServer = false;
+  List<String> pairedDeviceIds = [];
+  Map<String, String> pairedDevices = {};
+  List<String> deniedDeviceIds = [];
+  bool enableRemoteTunnel = false;
+  Map<String, bool> scraperToggles = {
+    'tmdb': true,
+    'tvmaze': true,
+    'omdb': false,
+    'jikan': true,
+    'shikimori': true,
+    'anilist': true,
+    'kitsu': true,
+    'spotify': true,
+    'lastfm': false,
+    'musicbrainz': true,
+    'opensubtitles': true,
+    'subscene': false,
+    'yifysubtitles': false,
+    'addic7ed': false,
+    'wikidata': true,
+    'imdb': true,
+    'openweather': false,
+    'danbooru': false,
+    'waifupics': false,
+  };
+  Map<String, bool> documentMetadataToggles = {
+    'googleBooks': true,
+    'openLibraryCovers': true,
+    'openLibrary': true,
+    'projectGutenberg': true,
+    'mangaDex': true,
+    'jikan': true,
+    'metaChan': false,
+    'mangaVerse': false,
+    'comicVine': true,
+  };
+  List<MediaFolder> mediaFolders = [];
   List<Map<String, String>> bookmarks = [
     {'name': 'AnimeNexus', 'url': 'https://anime.nexus'},
     {'name': 'AnimeKai', 'url': 'https://animekai.to/home'},
@@ -493,33 +592,153 @@ class PlaybackSettings {
         'autoProcessNewMedia': autoProcessNewMedia,
         'enableIntro': enableIntro,
         'enableMenuMusic': enableMenuMusic,
+        'showNsfwTab': showNsfwTab,
+        'movieStoragePath': movieStoragePath,
+        'tvShowStoragePath': tvShowStoragePath,
+        'nsfwStoragePath': nsfwStoragePath,
         'musicSavePath': musicSavePath,
+        'ebookStoragePath': ebookStoragePath,
+        'mangaStoragePath': mangaStoragePath,
+        'comicsStoragePath': comicsStoragePath,
         'ollamaModel': ollamaModel,
         'translationProfile': translationProfile.index,
         'isFullscreen': isFullscreen,
+        'enablePiaVpn': enablePiaVpn,
+        'piaVpnRegion': piaVpnRegion,
+        'piaVpnCustomPath': piaVpnCustomPath,
+        'mediaServerToken': mediaServerToken,
+        'autoStartServer': autoStartServer,
+        'pairedDeviceIds': pairedDeviceIds,
+        'pairedDevices': pairedDevices,
+        'deniedDeviceIds': deniedDeviceIds,
+        'enableRemoteTunnel': enableRemoteTunnel,
+        'scraperToggles': scraperToggles,
+        'documentMetadataToggles': documentMetadataToggles,
+        'mediaFolders': mediaFolders.map((f) => f.toJson()).toList(),
         'bookmarks': bookmarks,
+        'iptvMaxConnections': iptvMaxConnections,
+        'iptvUserAgent': iptvUserAgent,
+        'autoOrganizeManga': autoOrganizeManga,
+        'autoOrganizeComics': autoOrganizeComics,
+        'autoOrganizeEbooks': autoOrganizeEbooks,
+        'particleTheme': particleTheme.index,
       };
 
   factory PlaybackSettings.fromJson(Map<String, dynamic> json) {
     final settings = PlaybackSettings();
     settings.isMuted = json['isMuted'] ?? false;
+    settings.autoOrganizeManga = json['autoOrganizeManga'] ?? false;
+    settings.autoOrganizeComics = json['autoOrganizeComics'] ?? false;
+    settings.autoOrganizeEbooks = json['autoOrganizeEbooks'] ?? false;
+    settings.particleTheme = ParticleTheme.values[json['particleTheme'] ?? 0];
     settings.volume = json['volume'] ?? 1.0;
     settings.playbackSpeed = json['playbackSpeed'] ?? 1.0;
     settings.useOllamaTranslation = json['useOllamaTranslation'] ?? true;
     settings.autoProcessNewMedia = json['autoProcessNewMedia'] ?? true;
     settings.enableIntro = json['enableIntro'] ?? true;
     settings.enableMenuMusic = json['enableMenuMusic'] ?? true;
+    settings.showNsfwTab = json['showNsfwTab'] ?? false;
+    settings.movieStoragePath = json['movieStoragePath'];
+    settings.tvShowStoragePath = json['tvShowStoragePath'];
+    settings.nsfwStoragePath = json['nsfwStoragePath'];
     settings.musicSavePath = json['musicSavePath'];
+    settings.ebookStoragePath = json['ebookStoragePath'];
+    settings.mangaStoragePath = json['mangaStoragePath'];
+    settings.comicsStoragePath = json['comicsStoragePath'];
     settings.ollamaModel = json['ollamaModel'] ?? 'qwen2.5:14b-instruct';
     settings.translationProfile = json['translationProfile'] != null
         ? TranslationProfile.values[json['translationProfile']]
         : TranslationProfile.standard;
     settings.isFullscreen = json['isFullscreen'] ?? false;
+    settings.enablePiaVpn = json['enablePiaVpn'] ?? false;
+    settings.piaVpnRegion = json['piaVpnRegion'] ?? 'ca-ontario';
+    settings.piaVpnCustomPath = json['piaVpnCustomPath'];
+    settings.mediaServerToken = json['mediaServerToken'] ?? '';
+    settings.autoStartServer = json['autoStartServer'] ?? false;
+    settings.pairedDeviceIds = List<String>.from(json['pairedDeviceIds'] ?? []);
+    settings.pairedDevices =
+        Map<String, String>.from(json['pairedDevices'] ?? {});
+    settings.iptvMaxConnections = json['iptvMaxConnections'] ?? 2;
+    settings.iptvUserAgent = json['iptvUserAgent'] ??
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) LuminaMedia/1.0';
+
+    // Migration: If we have IDs but no names, add them with 'Unknown Device'
+    for (var id in settings.pairedDeviceIds) {
+      if (!settings.pairedDevices.containsKey(id)) {
+        settings.pairedDevices[id] = 'Unknown Device';
+      }
+    }
+
+    settings.deniedDeviceIds = List<String>.from(json['deniedDeviceIds'] ?? []);
+    settings.enableRemoteTunnel = json['enableRemoteTunnel'] ?? false;
+    if (json['scraperToggles'] != null) {
+      settings.scraperToggles = {
+        ...settings.scraperToggles,
+        ...Map<String, bool>.from(json['scraperToggles'] as Map),
+      };
+    }
+    if (json['documentMetadataToggles'] != null) {
+      settings.documentMetadataToggles = {
+        ...settings.documentMetadataToggles,
+        ...Map<String, bool>.from(json['documentMetadataToggles'] as Map),
+      };
+    }
+    if (json['mediaFolders'] != null) {
+      settings.mediaFolders = List<MediaFolder>.from(
+        (json['mediaFolders'] as List).map((e) => MediaFolder.fromJson(e)),
+      );
+    }
     if (json['bookmarks'] != null) {
       settings.bookmarks = List<Map<String, String>>.from(
         (json['bookmarks'] as List).map((e) => Map<String, String>.from(e)),
       );
     }
     return settings;
+  }
+}
+class PairedDevice {
+  final String id;
+  final String name;
+  final DateTime pairedAt;
+  final String? lastKnownIp;
+  final DateTime? lastSeenAt;
+
+  const PairedDevice({
+    required this.id,
+    required this.name,
+    required this.pairedAt,
+    this.lastKnownIp,
+    this.lastSeenAt,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'pairedAt': pairedAt.toIso8601String(),
+        'lastKnownIp': lastKnownIp,
+        'lastSeenAt': lastSeenAt?.toIso8601String(),
+      };
+
+  factory PairedDevice.fromJson(Map<String, dynamic> json) => PairedDevice(
+        id: json['id'] as String,
+        name: json['name'] as String,
+        pairedAt:
+            DateTime.tryParse(json['pairedAt'] as String? ?? '') ?? DateTime.now(),
+        lastKnownIp: json['lastKnownIp'] as String?,
+        lastSeenAt: DateTime.tryParse(json['lastSeenAt'] as String? ?? ''),
+      );
+
+  PairedDevice copyWith({
+    String? name,
+    String? lastKnownIp,
+    DateTime? lastSeenAt,
+  }) {
+    return PairedDevice(
+      id: id,
+      name: name ?? this.name,
+      pairedAt: pairedAt,
+      lastKnownIp: lastKnownIp ?? this.lastKnownIp,
+      lastSeenAt: lastSeenAt ?? this.lastSeenAt,
+    );
   }
 }
